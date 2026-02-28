@@ -1,160 +1,23 @@
-type NumberCard = { kind: "number"; value: number };
-type ActionCard = { kind: "action"; action: "freeze" | "flip_three" | "second_chance" };
-type ModifierCard = { kind: "modifier"; modifier: "plus" | "x2"; value?: number };
-type Card = NumberCard | ActionCard | ModifierCard;
-type PendingFreezeState = {
-  chooserPlayerId: string;
-  resumeFromPlayerId: string;
-  expiresAt: number;
-};
-type PendingQueuedAction = {
-  action: "freeze" | "flip_three";
-  chooserPlayerId: string;
-  resumeFromPlayerId: string;
-};
-export type SecondChanceStats = {
-  appearedCount: number;
-  blockedNumbers: number[];
-  discardPile: string[];
-};
+import {
+  InternalGameState,
+  PublicGameState,
+  ClientAction,
+  ApplyActionContext,
+  PlayerState,
+  PendingQueuedAction,
+  Card,
+  WinnerState,
+  NumberCard,
+  ActionCard
+} from "./types";
+import { createDeck, shuffle } from "./deck";
 
-export type PlayerState = {
-  id: string;
-  name: string;
-  cards: string[];
-  numberCards: number[];
-  modifierBonus: number;
-  hasX2: boolean;
-  secondChance: boolean;
-  passBonus: number;
-  roundScore: number;
-  totalScore: number;
-  busted: boolean;
-  passed: boolean;
-};
-
-export type WinnerState = {
-  playerId: string;
-  name: string;
-  totalScore: number;
-};
-
-export type InternalGameState = {
-  room: string;
-  round: number;
-  gameStarted: boolean;
-  adminPlayerId: string | null;
-  pendingFreeze: PendingFreezeState | null;
-  pendingActionQueue: PendingQueuedAction[];
-  pendingFlipThree: {
-    sourcePlayerId: string;
-    resumeFromPlayerId: string;
-  } | null;
-  players: PlayerState[];
-  turnOrder: string[];
-  currentTurnPlayerId: string | null;
-  deck: Card[];
-  secondChanceStats: SecondChanceStats;
-  message: string;
-  winner: WinnerState | null;
-  updatedAt: number;
-};
-
-export type PublicGameState = {
-  room: string;
-  round: number;
-  gameStarted: boolean;
-  adminPlayerId: string | null;
-  pendingFreeze: { chooserPlayerId: string; expiresAt: number } | null;
-  pendingFlipThree: {
-    sourcePlayerId: string;
-  } | null;
-  players: PlayerState[];
-  turnOrder: string[];
-  currentTurnPlayerId: string | null;
-  deckCount: number;
-  secondChanceStats: SecondChanceStats;
-  message: string;
-  winner: WinnerState | null;
-  updatedAt: number;
-};
-
-export type ClientAction =
-  | { type: "action"; action: "addPlayer"; payload: { name: string } }
-  | { type: "action"; action: "renamePlayer"; payload: { playerId: string; name: string } }
-  | { type: "action"; action: "startGame" }
-  | { type: "action"; action: "dealSelf" }
-  | { type: "action"; action: "passSelf" }
-  | { type: "action"; action: "resolveFreezeTarget"; payload: { targetPlayerId: string } }
-  | { type: "action"; action: "selectFlipThreeTarget"; payload: { targetPlayerId: string } }
-  | { type: "action"; action: "startNewRound" }
-  | { type: "action"; action: "resetGame" };
-
-export type ActionClientData = {
-  room: string;
-  clientId: string;
-  claimedPlayerId: string | null;
-};
-
-export type ApplyActionContext = {
-  actor: ActionClientData;
-  getRoomPlayerByClient: (room: string) => Map<string, string>;
-  clearRoomPlayerOwnership: (room: string) => void;
-};
+export * from "./types";
 
 const MAX_PLAYERS = 6;
 const WINNING_SCORE = 200;
 const FREEZE_TARGET_TIMEOUT_MS = 15000;
-
-function createDeck(): Card[] {
-  const deck: Card[] = [];
-
-  for (let value = 0; value <= 12; value += 1) {
-    const count = value === 0 ? 1 : value;
-    for (let i = 0; i < count; i += 1) {
-      deck.push({ kind: "number", value });
-    }
-  }
-
-  ["freeze", "flip_three", "second_chance"].forEach((action) => {
-    for (let i = 0; i < 3; i += 1) {
-      deck.push({ kind: "action", action: action as ActionCard["action"] });
-    }
-  });
-
-  [2, 4, 6, 8, 10].forEach((value) => {
-    deck.push({ kind: "modifier", modifier: "plus", value });
-  });
-  deck.push({ kind: "modifier", modifier: "x2" });
-
-  return shuffle(deck);
-}
-
-function shuffle<T>(items: T[]): T[] {
-  const arr = [...items];
-  for (let i = arr.length - 1; i > 0; i -= 1) {
-    const j = secureRandomInt(i + 1);
-    const tmp = arr[i];
-    arr[i] = arr[j];
-    arr[j] = tmp;
-  }
-  return arr;
-}
-
-function secureRandomInt(maxExclusive: number): number {
-  if (maxExclusive <= 1) return 0;
-
-  const maxUint32 = 0x100000000;
-  const cutoff = Math.floor(maxUint32 / maxExclusive) * maxExclusive;
-  const buffer = new Uint32Array(1);
-  while (true) {
-    crypto.getRandomValues(buffer);
-    const value = buffer[0];
-    if (value < cutoff) {
-      return value % maxExclusive;
-    }
-  }
-}
+export const TURN_TIMEOUT_MS = 30000;
 
 function createPlayer(name: string): PlayerState {
   return {
@@ -185,6 +48,7 @@ export function createInitialState(room: string): InternalGameState {
     players: [],
     turnOrder: [],
     currentTurnPlayerId: null,
+    turnStartedAt: null,
     deck: createDeck(),
     secondChanceStats: {
       appearedCount: 0,
@@ -237,6 +101,7 @@ function getNextTurnPlayerId(state: InternalGameState, currentPlayerId: string |
 function ensureCurrentTurn(state: InternalGameState): void {
   if (!state.gameStarted) {
     state.currentTurnPlayerId = null;
+    state.turnStartedAt = null;
     return;
   }
   if (state.pendingFreeze) {
@@ -252,10 +117,20 @@ function ensureCurrentTurn(state: InternalGameState): void {
     return;
   }
   state.currentTurnPlayerId = getNextTurnPlayerId(state, state.currentTurnPlayerId);
+  if (state.currentTurnPlayerId) {
+    state.turnStartedAt = Date.now();
+  } else {
+    state.turnStartedAt = null;
+  }
 }
 
 function advanceTurn(state: InternalGameState): void {
   state.currentTurnPlayerId = getNextTurnPlayerId(state, state.currentTurnPlayerId);
+  if (state.currentTurnPlayerId) {
+    state.turnStartedAt = Date.now();
+  } else {
+    state.turnStartedAt = null;
+  }
 }
 
 function enqueuePendingAction(
@@ -642,6 +517,7 @@ export function toPublicState(state: InternalGameState): PublicGameState {
     players: state.players,
     turnOrder: state.turnOrder,
     currentTurnPlayerId: state.currentTurnPlayerId,
+    turnStartedAt: state.turnStartedAt,
     deckCount: state.deck.length,
     secondChanceStats: state.secondChanceStats,
     message: state.message,
@@ -779,6 +655,7 @@ function resolveRoundAndMaybeStartNext(state: InternalGameState, reasonPrefix = 
     state.winner = { playerId: champion.id, name: champion.name, totalScore: champion.totalScore };
     state.gameStarted = false;
     state.currentTurnPlayerId = null;
+    state.turnStartedAt = null;
     clearPendingActionState(state);
     return `${reasonPrefix}${roundSummary} ${champion.name} 以 ${champion.totalScore} 分獲勝！`.trim();
   }
@@ -799,9 +676,35 @@ function resolveRoundAndMaybeStartNext(state: InternalGameState, reasonPrefix = 
   clearPendingActionState(state);
   normalizeTurnOrder(state);
   state.currentTurnPlayerId = getNextTurnPlayerId(state, null);
+  if (state.currentTurnPlayerId) {
+    state.turnStartedAt = Date.now();
+  } else {
+    state.turnStartedAt = null;
+  }
   const next = getPlayerById(state, state.currentTurnPlayerId);
   const startText = next ? ` 已開始第 ${state.round} 回合，${next.name} 先手。` : ` 已開始第 ${state.round} 回合。`;
   return `${reasonPrefix}${roundSummary}${overtimeText}${startText}`.trim();
+}
+
+export function handleTurnTimeout(state: InternalGameState): string | null {
+  if (!state.gameStarted || !state.currentTurnPlayerId || !state.turnStartedAt) return null;
+  if (Date.now() < state.turnStartedAt + TURN_TIMEOUT_MS) return null;
+
+  const player = getPlayerById(state, state.currentTurnPlayerId);
+  if (!player || !isPlayable(player)) return null;
+
+  // Auto-pass on timeout
+  player.passed = true;
+  player.passBonus = 0;
+  recalculateRoundScore(player);
+  const message = `${player.name} 操作逾時，已自動停牌。`;
+
+  advanceTurn(state);
+
+  if (shouldAutoResolveRound(state)) {
+    return resolveRoundAndMaybeStartNext(state, `${message} `);
+  }
+  return message;
 }
 
 export function applyAction(state: InternalGameState, action: ClientAction, context: ApplyActionContext): void {
@@ -918,6 +821,11 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
         state.turnOrder = shuffle(state.turnOrder);
       }
       state.currentTurnPlayerId = getNextTurnPlayerId(state, null);
+      if (state.currentTurnPlayerId) {
+        state.turnStartedAt = Date.now();
+      } else {
+        state.turnStartedAt = null;
+      }
       const first = getPlayerById(state, state.currentTurnPlayerId);
       writeMessage(first ? `新局開始，第 1 回合由 ${first.name} 先手。` : "新局開始，第 1 回合。");
       break;
@@ -1164,6 +1072,7 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
       state.players = [];
       state.turnOrder = [];
       state.currentTurnPlayerId = null;
+      state.turnStartedAt = null;
       state.deck = createDeck();
       state.secondChanceStats = {
         appearedCount: 0,

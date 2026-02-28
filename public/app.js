@@ -1,4 +1,4 @@
-      import React, { useEffect, useMemo, useRef, useState } from "https://esm.sh/react@18.3.1";
+import React, { useEffect, useMemo, useRef, useState } from "https://esm.sh/react@18.3.1";
       import { createRoot } from "https://esm.sh/react-dom@18.3.1/client";
       import htm from "https://esm.sh/htm@3.1.1";
 
@@ -37,6 +37,40 @@
         if (status === "connected") return "已連線";
         if (status === "reconnecting") return "重新連線中";
         return "連線中";
+      }
+
+      function TimerBar({ turnStartedAt }) {
+        const [timeLeft, setTimeLeft] = useState(30);
+
+        useEffect(() => {
+          if (!turnStartedAt) {
+            setTimeLeft(30);
+            return;
+          }
+
+          const update = () => {
+            const now = Date.now();
+            const elapsed = Math.floor((now - turnStartedAt) / 1000);
+            const remaining = Math.max(0, 30 - elapsed);
+            setTimeLeft(remaining);
+          };
+
+          update();
+          const timer = setInterval(update, 1000);
+          return () => clearInterval(timer);
+        }, [turnStartedAt]);
+
+        const percentage = (timeLeft / 30) * 100;
+        const barColor = timeLeft <= 5 ? "bg-rose-500" : timeLeft <= 10 ? "bg-amber-500" : "bg-emerald-500";
+
+        return html`
+          <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-slate-800">
+            <div
+              className=${`timer-bar h-full ${barColor}`}
+              style=${{ width: `${percentage}%` }}
+            />
+          </div>
+        `;
       }
 
       function App() {
@@ -112,10 +146,12 @@
 
         useEffect(() => {
           if (!game) return;
-          setDraftNames(() => {
-            const next = {};
+          setDraftNames((prev) => {
+            const next = { ...prev };
             game.players.forEach((player) => {
-              next[player.id] = player.name;
+              if (next[player.id] === undefined) {
+                next[player.id] = player.name;
+              }
             });
             return next;
           });
@@ -139,6 +175,7 @@
           if (!game || !you.claimedPlayerId) return null;
           return game.players.find((player) => player.id === you.claimedPlayerId) || null;
         }, [game, you.claimedPlayerId]);
+
         const isAdmin = Boolean(game && myPlayer && game.adminPlayerId === myPlayer.id);
         const pendingFreeze = game ? game.pendingFreeze : null;
         const pendingFreezeChooserId = pendingFreeze ? pendingFreeze.chooserPlayerId : null;
@@ -164,20 +201,6 @@
             !game.winner &&
             status === "connected"
         );
-        const isTurnLockedForMe = Boolean(
-          game &&
-            myPlayer &&
-            game.currentTurnPlayerId &&
-            game.currentTurnPlayerId !== myPlayer.id &&
-            !game.winner
-        );
-        const hideButtonsForThisClient = isTurnLockedForMe;
-
-        const orderedPlayers = useMemo(() => {
-          if (!game) return [];
-          const byId = new Map(game.players.map((p) => [p.id, p]));
-          return game.turnOrder.map((id) => byId.get(id)).filter(Boolean);
-        }, [game]);
 
         const pushToast = (text, kind = "info") => {
           const message = String(text || "").trim();
@@ -187,7 +210,7 @@
           const timerId = setTimeout(() => {
             setToasts((prev) => prev.filter((toast) => toast.id !== id));
             toastTimersRef.current.delete(id);
-          }, kind === "error" ? 4200 : 3200);
+          }, kind === "error" ? 5000 : 3500);
           toastTimersRef.current.set(id, timerId);
         };
 
@@ -239,208 +262,164 @@
 
         return html`
           <main className="mx-auto min-h-screen w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
-            <header className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl">
+            <header className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl backdrop-blur-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Flip 7 多人同步</h1>
-                  <p className="mt-1 text-sm text-slate-300">房間：<span className="font-semibold">${ROOM}</span></p>
-                  <p className="mt-1 text-xs text-slate-400">我的座位：<span className="font-semibold">${myPlayer ? myPlayer.name : "尚未綁定玩家"}</span></p>
+                  <h1 className="text-2xl font-bold tracking-tight text-cyan-400 sm:text-3xl">Flip 7 多人連線版</h1>
+                  <p className="mt-1 text-sm text-slate-300">房間：<span className="font-semibold text-slate-100">${ROOM}</span></p>
+                  <p className="mt-1 text-xs text-slate-400">我的座位：<span className="font-semibold">${myPlayer ? myPlayer.name : "尚未加入"}</span></p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className=${`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${connectionBadge(status)}`}>
                     ${connectionLabel(status)}
                   </span>
-                  <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
+                  <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs text-slate-300">
                     回合 ${game ? game.round : "-"}
                   </span>
-                  <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-300">
-                    狀態 ${game && game.gameStarted ? "進行中" : "等待開局"}
+                  <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs text-slate-300">
+                    ${game && game.gameStarted ? "遊戲進行中" : "等待中"}
                   </span>
                 </div>
               </div>
             </header>
 
             <section className="grid gap-6 lg:grid-cols-3">
-              <div className="rounded-2xl border border-slate-800 bg-slate-900 p-5 lg:col-span-2">
-                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                  <h2 className="text-lg font-semibold">玩家</h2>
-                  <p className="text-xs text-slate-400">${game ? `${game.players.length} / 6 位玩家` : "0 / 6 位玩家"}</p>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 lg:col-span-2">
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
+                  <h2 className="text-lg font-semibold">遊戲桌面</h2>
+                  <p className="text-xs text-slate-400">${game ? `${game.players.length} / 6` : "0 / 6"} 玩家</p>
                 </div>
 
-                ${!hideButtonsForThisClient
+                ${!myPlayer && game && !game.gameStarted
                   ? html`
-                      <form className="mb-4 flex flex-col gap-3 sm:flex-row" onSubmit=${onSubmitAddPlayer}>
+                      <form className="mb-6 flex flex-col gap-3 sm:flex-row" onSubmit=${onSubmitAddPlayer}>
                         <input
                           type="text"
                           value=${newPlayerName}
                           onChange=${(e) => setNewPlayerName(e.target.value)}
                           maxLength="20"
-                          placeholder="輸入玩家名稱"
+                          placeholder="輸入您的暱稱"
                           className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
-                          disabled=${!game || game.players.length >= 6 || Boolean(myPlayer) || Boolean(game && game.gameStarted)}
                           required
                         />
                         <button
                           type="submit"
-                          disabled=${!game || game.players.length >= 6 || status !== "connected" || Boolean(myPlayer) || Boolean(game && game.gameStarted)}
-                          className="rounded-lg bg-cyan-500 px-4 py-2 font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                          disabled=${status !== "connected" || game.players.length >= 6}
+                          className="rounded-lg bg-cyan-500 px-6 py-2 font-bold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
                         >
-                          加入玩家
+                          加入戰局
                         </button>
                       </form>
                     `
-                  : html`
-                      <p className="mb-4 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">
-                        目前不是你的回合，按鈕已隱藏。現在輪到 ${currentPlayer ? currentPlayer.name : "—"}。
-                      </p>
-                    `}
+                  : null}
 
                 <div className="grid gap-4 sm:grid-cols-2">
                   ${!game || game.players.length === 0
-                    ? html`<p className="text-sm text-slate-400">尚未加入玩家。</p>`
+                    ? html`<div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-slate-800 py-10 text-slate-500 sm:col-span-2">目前沒有玩家加入</div>`
                     : game.players.map((player) => {
-                        const isCurrentTurn = game.currentTurnPlayerId === player.id && !player.busted && !player.passed;
+                        const isCurrentTurn = game.currentTurnPlayerId === player.id;
                         const isMine = you.claimedPlayerId === player.id;
-                        const canDealOrPass = canAct && isMine && isCurrentTurn && !pendingFlipThree && !pendingFreeze;
-                        const cardClass = player.busted
-                          ? "border-rose-500/60 bg-rose-500/10"
-                          : player.passed
-                            ? "border-amber-500/60 bg-amber-500/10"
-                            : isCurrentTurn
-                              ? "border-emerald-400 bg-emerald-500/10"
-                              : "border-slate-700 bg-slate-950/70";
+                        const isActive = isCurrentTurn && !player.busted && !player.passed;
 
-                        const statusText = player.busted
-                          ? "爆牌 - 跳過"
-                          : player.passed
-                            ? "停牌 - 跳過"
-                            : pendingFreeze && pendingFreezeChooserId === player.id
-                              ? "請指定凍結目標"
-                            : pendingFlipThree && pendingFlipThreeOwnerId === player.id
-                              ? "請指定翻三張目標"
-                            : !game.gameStarted
-                              ? "等待房主開局"
-                            : isCurrentTurn
-                              ? "當前回合"
-                              : "等待中";
+                        let cardClass = "player-card border-slate-700 bg-slate-950/60";
+                        if (player.busted) cardClass = "player-card border-rose-500/50 bg-rose-500/5 grayscale-[0.5]";
+                        if (player.passed) cardClass = "player-card border-amber-500/50 bg-amber-500/5";
+                        if (isCurrentTurn && !game.winner) cardClass += " active-turn";
 
                         return html`
                           <article key=${player.id} className=${`rounded-xl border p-4 ${cardClass}`}>
-                            <div className="mb-2 flex items-start justify-between gap-2">
-                              <input
-                                value=${draftNames[player.id] ?? player.name}
-                                onChange=${(e) =>
-                                  setDraftNames((prev) => ({
-                                    ...prev,
-                                    [player.id]: e.target.value
-                                  }))}
-                                onBlur=${() => onRenameCommit(player.id)}
-                                onKeyDown=${(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    e.currentTarget.blur();
-                                  }
-                                }}
-                                maxLength="20"
-                                className="w-40 rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm font-semibold text-slate-100 focus:border-cyan-500 focus:outline-none"
-                                disabled=${!isMine || hideButtonsForThisClient || status !== "connected" || Boolean(game.winner)}
-                              />
+                            <div className="mb-3 flex items-start justify-between">
+                              <div className="flex-1">
+                                <input
+                                  value=${draftNames[player.id] ?? player.name}
+                                  onChange=${(e) => setDraftNames((prev) => ({ ...prev, [player.id]: e.target.value }))}
+                                  onBlur=${() => onRenameCommit(player.id)}
+                                  className="w-full truncate border-none bg-transparent text-lg font-bold text-slate-100 focus:outline-none disabled:cursor-default"
+                                  disabled=${!isMine || !!game.winner}
+                                />
+                                <p className=${`text-xs ${isActive ? "text-emerald-400 font-semibold" : "text-slate-500"}`}>
+                                  ${player.busted ? "爆牌" : player.passed ? "已停牌" : isActive ? "行動中" : "等待"}
+                                </p>
+                              </div>
                               <div className="flex flex-col items-end gap-1">
-                                <p className="text-xs text-slate-400">#${player.numberCards.length}</p>
-                                ${isMine
-                                  ? html`
-                                      <span className="rounded-md border border-emerald-500/60 px-2 py-0.5 text-[10px] text-emerald-300">
-                                        我的玩家
-                                      </span>
-                                    `
-                                  : null}
-                                ${game.adminPlayerId === player.id
-                                  ? html`
-                                      <span className="rounded-md border border-amber-500/60 px-2 py-0.5 text-[10px] text-amber-300">
-                                        房主
-                                      </span>
-                                    `
-                                  : null}
+                                <span className="text-xl font-bold text-cyan-400">${player.roundScore}</span>
+                                <span className="text-[10px] uppercase tracking-wider text-slate-500">本局得分</span>
                               </div>
                             </div>
 
-                            <p className="text-xs text-slate-300">${statusText}</p>
-                            <p className="mt-2 text-sm text-slate-300">
-                              手牌：
-                              <span className="text-slate-100"> ${player.cards.length ? player.cards.join(", ") : "目前無手牌"}</span>
-                            </p>
-                            <p className="mt-1 text-sm text-slate-300">本回合分數：<span className="font-semibold text-slate-100">${player.roundScore}</span></p>
-                            ${player.passBonus > 0
-                              ? html`<p className="mt-1 text-xs text-amber-300">停牌獎勵：+${player.passBonus}</p>`
-                              : null}
-                            <p className="mt-1 text-sm text-slate-400">總分：${player.totalScore}</p>
-                            <p className="mt-1 text-xs text-slate-400">第二次機會：${player.secondChance ? "有" : "無"}</p>
-                            ${!hideButtonsForThisClient && isMine && game.gameStarted
+                            ${isActive && !game.winner ? html`<${TimerBar} turnStartedAt=${game.turnStartedAt} />` : null}
+
+                            <div className="mt-4 flex flex-wrap gap-1.5">
+                              ${player.cards.length === 0
+                                ? html`<span className="text-xs italic text-slate-600">無手牌</span>`
+                                : player.cards.map((card, idx) => html`
+                                    <span key=${`${player.id}-${card}-${idx}`} className="card-item inline-flex rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs font-medium text-slate-200 shadow-sm">
+                                      ${card}
+                                    </span>
+                                  `)}
+                            </div>
+
+                            <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3 text-xs text-slate-400">
+                              <span>總分: <b className="text-slate-200">${player.totalScore}</b></span>
+                              <span>${player.secondChance ? html`<span className="text-emerald-400">★ 第二次機會</span>` : ""}</span>
+                            </div>
+
+                            ${isMine && isActive && !game.winner && !pendingFlipThree && !pendingFreeze
                               ? html`
-                                  <div className="mt-3 grid grid-cols-2 gap-2">
+                                  <div className="mt-4 grid grid-cols-2 gap-2">
                                     <button
                                       onClick=${() => sendAction("dealSelf")}
-                                      disabled=${!canDealOrPass}
-                                      className="rounded-lg bg-cyan-500 px-3 py-2 text-sm font-bold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                                      className="rounded-lg bg-cyan-500 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400"
                                     >
                                       抽牌
                                     </button>
                                     <button
                                       onClick=${() => sendAction("passSelf")}
-                                      disabled=${!canDealOrPass}
-                                      className="rounded-lg border border-amber-400 px-3 py-2 text-sm font-bold text-amber-300 transition hover:bg-amber-400/10 disabled:cursor-not-allowed disabled:border-slate-700 disabled:text-slate-500"
+                                      className="rounded-lg border border-amber-500/50 py-2.5 text-sm font-bold text-amber-300 transition hover:bg-amber-500/10"
                                     >
                                       停牌
                                     </button>
                                   </div>
                                 `
                               : null}
-                            ${!hideButtonsForThisClient && isMine && isMyPendingFlipThree
+
+                            ${isMine && isMyPendingFlipThree && !game.winner
                               ? html`
-                                  <div className="mt-3 space-y-2 rounded-lg border border-cyan-500/40 bg-cyan-500/10 p-3">
-                                    <p className="text-xs text-cyan-300">請指定一位玩家連翻三張：</p>
-                                    <div className="grid grid-cols-2 gap-2">
+                                  <div className="mt-4 space-y-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3">
+                                    <p className="text-[10px] font-bold uppercase text-cyan-300">指定玩家連翻三張：</p>
+                                    <div className="flex flex-wrap gap-2">
                                       ${game.players
-                                        .filter((target) => !target.busted && !target.passed)
-                                        .map(
-                                          (target) => html`
-                                            <button
-                                              key=${target.id}
-                                              onClick=${() =>
-                                                sendAction("selectFlipThreeTarget", {
-                                                  targetPlayerId: target.id
-                                                })}
-                                              className="rounded-lg border border-cyan-400 px-2 py-1 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-400/15"
-                                            >
-                                              ${target.name}
-                                            </button>
-                                          `
-                                        )}
+                                        .filter((t) => !t.busted && !t.passed)
+                                        .map((t) => html`
+                                          <button
+                                            key=${t.id}
+                                            onClick=${() => sendAction("selectFlipThreeTarget", { targetPlayerId: t.id })}
+                                            className="rounded bg-cyan-500/20 px-2 py-1 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/40"
+                                          >
+                                            ${t.name}
+                                          </button>
+                                        `)}
                                     </div>
                                   </div>
                                 `
                               : null}
-                            ${!hideButtonsForThisClient && isMine && isMyPendingFreeze
+
+                            ${isMine && isMyPendingFreeze && !game.winner
                               ? html`
-                                  <div className="mt-3 space-y-2 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3">
-                                    <p className="text-xs text-rose-200">請指定一位 active 玩家套用凍結：</p>
-                                    <div className="grid grid-cols-2 gap-2">
+                                  <div className="mt-4 space-y-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3">
+                                    <p className="text-[10px] font-bold uppercase text-rose-300">指定玩家凍結：</p>
+                                    <div className="flex flex-wrap gap-2">
                                       ${game.players
-                                        .filter((target) => !target.busted && !target.passed)
-                                        .map(
-                                          (target) => html`
-                                            <button
-                                              key=${target.id}
-                                              onClick=${() =>
-                                                sendAction("resolveFreezeTarget", {
-                                                  targetPlayerId: target.id
-                                                })}
-                                              className="rounded-lg border border-rose-400 px-2 py-1 text-xs font-semibold text-rose-100 transition hover:bg-rose-400/15"
-                                            >
-                                              ${target.name}
-                                            </button>
-                                          `
-                                        )}
+                                        .filter((t) => !t.busted && !t.passed)
+                                        .map((t) => html`
+                                          <button
+                                            key=${t.id}
+                                            onClick=${() => sendAction("resolveFreezeTarget", { targetPlayerId: t.id })}
+                                            className="rounded bg-rose-500/20 px-2 py-1 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/40"
+                                          >
+                                            ${t.name}
+                                          </button>
+                                        `)}
                                     </div>
                                   </div>
                                 `
@@ -451,150 +430,106 @@
                 </div>
               </div>
 
-              <aside className="rounded-2xl border border-slate-800 bg-slate-900 p-5">
-                <h2 className="mb-4 text-lg font-semibold">排行榜</h2>
-                <div className="space-y-2">
-                  ${!game || game.players.length === 0
-                    ? html`<p className="text-sm text-slate-400">加入玩家後會顯示排行榜。</p>`
-                    : [...game.players]
-                        .sort((a, b) => b.totalScore - a.totalScore || b.roundScore - a.roundScore)
-                        .map(
-                          (player, index) => html`
-                            <div key=${player.id} className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-950/70 px-3 py-2 text-sm">
-                              <div className="flex items-center gap-2">
-                                <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-slate-800 text-xs">${index + 1}</span>
-                                <span>${player.name}</span>
-                              </div>
-                              <span className="font-semibold">${player.totalScore}</span>
-                            </div>
-                          `
-                        )}
+              <aside className="space-y-6">
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+                  <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">管理控制台</h2>
+                  ${isAdmin
+                    ? html`
+                        <div className="space-y-3">
+                          <button
+                            onClick=${() => sendAction("startGame")}
+                            className="w-full rounded-xl bg-cyan-500 py-3 font-bold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400 disabled:opacity-50"
+                          >
+                            ${game && game.gameStarted ? "重新開始遊戲" : "開始新局"}
+                          </button>
+                          <button
+                            onClick=${() => sendAction("startNewRound")}
+                            disabled=${!game || !game.gameStarted || !!game.winner || !!pendingFlipThree || !!pendingFreeze}
+                            className="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 disabled:opacity-50"
+                          >
+                            手動開始新回合
+                          </button>
+                          <button
+                            onClick=${() => sendAction("resetGame")}
+                            className="w-full rounded-xl border border-slate-700 py-3 font-bold text-slate-400 transition hover:border-rose-500/50 hover:text-rose-400"
+                          >
+                            重置房間
+                          </button>
+                        </div>
+                      `
+                    : html`
+                        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-center">
+                          <p className="text-sm text-slate-500">只有房主可以控制遊戲流程</p>
+                        </div>
+                      `}
                 </div>
 
-                ${!hideButtonsForThisClient && isAdmin
-                  ? html`
-                      <div className="mt-5 space-y-3">
-                        <button
-                          onClick=${() => sendAction("startGame")}
-                          disabled=${!hasPlayers || status !== "connected"}
-                          className="w-full rounded-lg bg-cyan-500 px-4 py-2 font-semibold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-                        >
-                          開始新局
-                        </button>
-
-                        <button
-                          onClick=${() => sendAction("startNewRound")}
-                          disabled=${!hasPlayers || status !== "connected" || !Boolean(game && game.gameStarted) || Boolean(game && game.winner) || Boolean(pendingFlipThree) || Boolean(pendingFreeze)}
-                          className="w-full rounded-lg bg-emerald-500 px-4 py-2 font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-                        >
-                          開始新回合
-                        </button>
-
-                        <button
-                          onClick=${() => sendAction("resetGame")}
-                          disabled=${!hasPlayers || status !== "connected"}
-                          className="w-full rounded-lg border border-slate-700 px-4 py-2 font-semibold transition hover:border-slate-500 disabled:cursor-not-allowed disabled:text-slate-500"
-                        >
-                          重置遊戲
-                        </button>
-                      </div>
-                    `
-                  : null}
-                ${!isAdmin && myPlayer
-                  ? html`
-                      <p className="mt-5 rounded-lg border border-slate-800 bg-slate-950/50 px-3 py-2 text-xs text-slate-400">
-                        僅房主可操作「開始新局 / 開始新回合 / 重置遊戲」。
-                      </p>
-                    `
-                  : null}
-
-                <div className="mt-4 space-y-2 text-sm text-slate-300">
-                  <p>目前回合：<span className="font-semibold text-slate-100">${currentPlayer ? currentPlayer.name : "-"}</span></p>
-                  <p>我的座位：<span className="font-semibold text-slate-100">${myPlayer ? myPlayer.name : "-"}</span></p>
-                  <p>房主：<span className="font-semibold text-slate-100">${game && game.adminPlayerId ? (game.players.find((p) => p.id === game.adminPlayerId)?.name || "-") : "-"}</span></p>
-                  <p>牌庫剩餘：<span className="font-semibold text-slate-100">${game ? game.deckCount : "-"}</span></p>
-                  <p>第二次機會出現：<span className="font-semibold text-slate-100">${secondChanceStats.appearedCount}</span></p>
-                  <p className="text-xs text-slate-400">
-                    第二次機會擋下：${secondChanceStats.blockedNumbers.length ? secondChanceStats.blockedNumbers.join(", ") : "-"}
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    出牌順序：${orderedPlayers.length ? orderedPlayers.map((p) => p.name).join(" -> ") : "-"}
-                  </p>
-                  ${pendingFlipThree
-                    ? html`
-                        <p className="rounded-lg border border-cyan-500/40 bg-cyan-500/10 px-3 py-2 text-xs text-cyan-200">
-                          ${game.players.find((p) => p.id === pendingFlipThreeOwnerId)?.name || "當前玩家"}
-                          需要先指定「翻三張」目標。
-                        </p>
-                      `
-                    : null}
-                  ${pendingFreeze
-                    ? html`
-                        <p className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
-                          ${game.players.find((p) => p.id === pendingFreezeChooserId)?.name || "當前玩家"}
-                          需要先指定「凍結」目標。
-                        </p>
-                      `
-                    : null}
-                  <p className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
-                    系統訊息會以 Toast 顯示在畫面上方。
-                  </p>
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-2">
-                    <p className="text-xs font-semibold text-slate-300">棄牌堆（第二次機會紀錄）</p>
-                    <div className="mt-2 max-h-28 space-y-1 overflow-y-auto pr-1 text-xs text-slate-400">
-                      ${secondChanceStats.discardPile.length
-                        ? secondChanceStats.discardPile
-                            .slice()
-                            .reverse()
-                            .map((entry, idx) => html`<p key=${`sc-${idx}-${entry}`}>${entry}</p>`)
-                        : html`<p>目前沒有紀錄。</p>`}
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+                  <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">統計數據</h2>
+                  <div className="space-y-4 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">剩餘牌數</span>
+                      <span className="font-mono font-bold text-slate-100">${game ? game.deckCount : "-"}</span>
                     </div>
+                    <div className="flex justify-between">
+                      <span className="text-slate-400">第二次機會次數</span>
+                      <span className="font-mono font-bold text-emerald-400">${secondChanceStats.appearedCount}</span>
+                    </div>
+                    <div>
+                      <span className="text-xs text-slate-500">擋下的數字：</span>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        ${secondChanceStats.blockedNumbers.length === 0
+                          ? html`<span className="text-[10px] text-slate-600 italic">無</span>`
+                          : secondChanceStats.blockedNumbers.map((n, i) => html`<span key=${i} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px]">${n}</span>`)}
+                      </div>
+                    </div>
+                    <div className="rounded-lg bg-slate-950 p-3">
+                      <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">最近動態</p>
+                      <div className="max-h-32 space-y-1 overflow-y-auto pr-1 text-[11px] text-slate-400">
+                        ${secondChanceStats.discardPile.length === 0
+                          ? html`<p className="italic text-slate-600">尚無紀錄</p>`
+                          : secondChanceStats.discardPile.slice().reverse().map((log, i) => html`<p key=${i} className="border-l border-slate-800 pl-2 py-0.5">${log}</p>`)}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+                  <h2 className="mb-4 text-lg font-semibold text-amber-500 border-b border-slate-800 pb-2">遊戲規則說明 (v3.1)</h2>
+                  <div className="space-y-3 text-[11px] leading-relaxed text-slate-400">
+                    <p><b className="text-slate-200">牌組分佈：</b>數字牌 (0-12) 採階梯式分佈，數字 1 有 1 張，數字 12 有 12 張（0 也是 1 張）。共 79 張數字牌。</p>
+                    <p><b className="text-slate-200">特殊牌：</b>凍結 (3)、翻三張 (3)、第二次機會 (3) 各 3 張。加分牌 (+2~+10) 與兩倍牌 (x2) 共 6 張。全組 94 張。</p>
+                    <p><b className="text-slate-200">回合時限：</b>每回合 30 秒，逾時將自動停牌。指定目標效果則有 15 秒時限。</p>
+                    <p><b className="text-slate-200">獲勝條件：</b>首位總分達到 200 分的玩家獲勝。若該回合多人達標且平手，將進入延長賽直到分出勝負。</p>
                   </div>
                 </div>
               </aside>
             </section>
           </main>
 
-          ${toasts.length > 0
-            ? html`
-                <div className="pointer-events-none fixed inset-x-0 top-3 z-40 flex justify-center px-3 sm:top-4">
-                  <div className="w-full max-w-lg space-y-2">
-                    ${toasts.map((toast) => {
-                      const toastClass =
-                        toast.kind === "error"
-                          ? "border-rose-400/70 bg-rose-500/20 text-rose-100"
-                          : "border-cyan-400/60 bg-slate-900/95 text-slate-100";
-                      return html`
-                        <div
-                          key=${toast.id}
-                          className=${`pointer-events-auto rounded-xl border px-4 py-3 text-sm shadow-2xl backdrop-blur ${toastClass}`}
-                        >
-                          ${toast.text}
-                        </div>
-                      `;
-                    })}
-                  </div>
-                </div>
-              `
-            : null}
+          <div className="pointer-events-none fixed inset-x-0 top-6 z-50 flex flex-col items-center gap-2 px-4">
+            ${toasts.map((toast) => html`
+              <div key=${toast.id} className=${`toast-item pointer-events-auto max-w-md rounded-xl border px-5 py-3 text-sm font-medium shadow-2xl backdrop-blur-md ${
+                toast.kind === "error" ? "border-rose-500/50 bg-rose-500/10 text-rose-200" : "border-cyan-500/50 bg-slate-900/90 text-cyan-100"
+              }`}>
+                ${toast.text}
+              </div>
+            `)}
+          </div>
 
           ${game && game.winner
             ? html`
-                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-                  <div className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6 text-center shadow-2xl">
-                    <p className="text-sm uppercase tracking-wide text-cyan-400">遊戲獲勝者</p>
-                    <h3 className="mt-2 text-2xl font-bold">${game.winner.name}</h3>
-                    <p className="mt-1 text-sm text-slate-300">最終分數：${game.winner.totalScore}</p>
-                    ${!hideButtonsForThisClient && isAdmin
-                      ? html`
-                          <button
-                            onClick=${() => sendAction("startGame")}
-                            className="mt-5 w-full rounded-lg bg-cyan-500 px-4 py-2 font-semibold text-slate-950 transition hover:bg-cyan-400"
-                          >
-                            開始新局
-                          </button>
-                        `
-                      : null}
+                <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
+                  <div className="w-full max-w-md animate-bounce-short rounded-3xl border border-cyan-500/30 bg-slate-900 p-8 text-center shadow-[0_0_50px_rgba(34,211,238,0.2)]">
+                    <div className="mb-4 inline-flex h-20 w-20 items-center justify-center rounded-full bg-cyan-500/10 text-4xl">🏆</div>
+                    <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-cyan-400">恭喜獲勝</h2>
+                    <h3 className="mt-2 text-3xl font-black text-slate-100">${game.winner.name}</h3>
+                    <p className="mt-4 text-slate-400">總得分：<span className="text-2xl font-bold text-slate-100">${game.winner.totalScore}</span></p>
+                    ${isAdmin ? html`
+                      <button onClick=${() => sendAction("startGame")} className="mt-8 w-full rounded-xl bg-cyan-500 py-4 font-black text-slate-950 transition hover:bg-cyan-400">
+                        開啟新局
+                      </button>
+                    ` : null}
                   </div>
                 </div>
               `

@@ -7,6 +7,7 @@ import {
   applyAction as applyGameAction,
   createInitialState,
   toPublicState,
+  handleTurnTimeout,
   type ActionClientData,
   type ClientAction,
   type InternalGameState
@@ -35,9 +36,9 @@ const MIME_TYPES: Record<string, string> = {
 
 const store = new GameStore();
 
-export function applyAction(state: InternalGameState, action: ClientAction, ws: ServerWebSocket<WSData>): void {
+export function applyAction(state: InternalGameState, action: ClientAction, wsData: WSData): void {
   applyGameAction(state, action, {
-    actor: ws.data,
+    actor: wsData,
     getRoomPlayerByClient,
     clearRoomPlayerOwnership
   });
@@ -104,7 +105,7 @@ async function handleAction(ws: ServerWebSocket<WSData>, action: ClientAction): 
   const room = ws.data.room;
   await withRoomLock(room, async () => {
     const state = await store.get(room);
-    applyAction(state, action, ws);
+    applyAction(state, action, ws.data);
     await store.set(room, state);
     await pushState(room);
   });
@@ -143,6 +144,23 @@ function getLanIps(): string[] {
   });
 
   return ips;
+}
+
+function setupBackgroundTimers() {
+  setInterval(async () => {
+    const activeRooms = await store.getAllActiveRooms();
+    for (const room of activeRooms) {
+      await withRoomLock(room, async () => {
+        const state = await store.get(room);
+        const timeoutMessage = handleTurnTimeout(state);
+        if (timeoutMessage) {
+          state.message = timeoutMessage;
+          await store.set(room, state);
+          await pushState(room);
+        }
+      });
+    }
+  }, 1000);
 }
 
 function startServer() {
@@ -217,5 +235,6 @@ function startServer() {
 
 if (import.meta.main) {
   await store.init();
+  setupBackgroundTimers();
   startServer();
 }

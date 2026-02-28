@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyAction, createInitialState } from "./src/server";
+import { applyAction, createInitialState } from "../src/server";
 
 type WSStub = {
   data: {
@@ -25,7 +25,7 @@ function act(state: ReturnType<typeof createInitialState>, ws: WSStub, action: s
     payload === undefined
       ? ({ type: "action", action } as never)
       : ({ type: "action", action, payload } as never),
-    ws as never
+    ws.data as never
   );
 }
 
