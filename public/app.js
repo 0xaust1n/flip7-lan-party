@@ -265,7 +265,7 @@ import React, { useEffect, useMemo, useRef, useState } from "https://esm.sh/reac
             <header className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl backdrop-blur-sm">
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
-                  <h1 className="text-2xl font-bold tracking-tight text-cyan-400 sm:text-3xl">Flip 7 多人連線版</h1>
+                  <h1 className="text-2xl font-bold tracking-tight text-cyan-400 sm:text-3xl">Flip 7 Lan Party</h1>
                   <p className="mt-1 text-sm text-slate-300">房間：<span className="font-semibold text-slate-100">${ROOM}</span></p>
                   <p className="mt-1 text-xs text-slate-400">我的座位：<span className="font-semibold">${myPlayer ? myPlayer.name : "尚未加入"}</span></p>
                 </div>
@@ -293,22 +293,26 @@ import React, { useEffect, useMemo, useRef, useState } from "https://esm.sh/reac
                 ${!myPlayer && game && !game.gameStarted
                   ? html`
                       <form className="mb-6 flex flex-col gap-3 sm:flex-row" onSubmit=${onSubmitAddPlayer}>
-                        <input
-                          type="text"
-                          value=${newPlayerName}
-                          onChange=${(e) => setNewPlayerName(e.target.value)}
-                          maxLength="20"
-                          placeholder="輸入您的暱稱"
-                          className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
-                          required
-                        />
-                        <button
-                          type="submit"
-                          disabled=${status !== "connected" || game.players.length >= 6}
-                          className="rounded-lg bg-cyan-500 px-6 py-2 font-bold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
-                        >
-                          加入戰局
-                        </button>
+                        <div className="sm:w-[75%]">
+                          <input
+                            type="text"
+                            value=${newPlayerName}
+                            onChange=${(e) => setNewPlayerName(e.target.value)}
+                            maxLength="20"
+                            placeholder="輸入您的暱稱"
+                            className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
+                            required
+                          />
+                        </div>
+                        <div className="sm:w-[25%]">
+                          <button
+                            type="submit"
+                            disabled=${status !== "connected" || game.players.length >= 6}
+                            className="w-full whitespace-nowrap rounded-lg bg-cyan-500 py-2 font-bold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+                          >
+                            加入戰局
+                          </button>
+                        </div>
                       </form>
                     `
                   : null}
