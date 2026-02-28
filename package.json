@@ -1,0 +1,10 @@
+{
+  "name": "flip-7",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "bun --env-file=.env --hot server.ts",
+    "start": "bun --env-file=.env server.ts"
+  }
+}
