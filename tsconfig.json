@@ -3,11 +3,19 @@
     "target": "ESNext",
     "module": "Preserve",
     "moduleResolution": "bundler",
-    "lib": ["ESNext"],
-    "types": ["bun-types", "node"],
+    "lib": [
+      "ESNext"
+    ],
+    "types": [
+      "bun-types",
+      "node"
+    ],
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src/**/*.ts", "server.test.ts"]
+  "include": [
+    "src/**/*.ts",
+    "server.test.ts"
+  ]
 }
