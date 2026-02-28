@@ -17,6 +17,11 @@ type PendingQueuedAction = {
   chooserPlayerId: string;
   resumeFromPlayerId: string;
 };
+type SecondChanceStats = {
+  appearedCount: number;
+  blockedNumbers: number[];
+  discardPile: string[];
+};
 
 type PlayerState = {
   id: string;
@@ -54,6 +59,7 @@ type InternalGameState = {
   turnOrder: string[];
   currentTurnPlayerId: string | null;
   deck: Card[];
+  secondChanceStats: SecondChanceStats;
   message: string;
   winner: WinnerState | null;
   updatedAt: number;
@@ -72,6 +78,7 @@ type PublicGameState = {
   turnOrder: string[];
   currentTurnPlayerId: string | null;
   deckCount: number;
+  secondChanceStats: SecondChanceStats;
   message: string;
   winner: WinnerState | null;
   updatedAt: number;
@@ -133,12 +140,27 @@ function createDeck(): Card[] {
 function shuffle<T>(items: T[]): T[] {
   const arr = [...items];
   for (let i = arr.length - 1; i > 0; i -= 1) {
-    const j = Math.floor(Math.random() * (i + 1));
+    const j = secureRandomInt(i + 1);
     const tmp = arr[i];
     arr[i] = arr[j];
     arr[j] = tmp;
   }
   return arr;
+}
+
+function secureRandomInt(maxExclusive: number): number {
+  if (maxExclusive <= 1) return 0;
+
+  const maxUint32 = 0x100000000;
+  const cutoff = Math.floor(maxUint32 / maxExclusive) * maxExclusive;
+  const buffer = new Uint32Array(1);
+  while (true) {
+    crypto.getRandomValues(buffer);
+    const value = buffer[0];
+    if (value < cutoff) {
+      return value % maxExclusive;
+    }
+  }
 }
 
 function createPlayer(name: string): PlayerState {
@@ -171,6 +193,11 @@ export function createInitialState(room: string): InternalGameState {
     turnOrder: [],
     currentTurnPlayerId: null,
     deck: createDeck(),
+    secondChanceStats: {
+      appearedCount: 0,
+      blockedNumbers: [],
+      discardPile: []
+    },
     message: "歡迎來到 Flip 7，請先加入玩家並由房主開始新局。",
     winner: null,
     updatedAt: Date.now()
@@ -285,6 +312,26 @@ function getActivePlayers(state: InternalGameState): PlayerState[] {
   return state.players.filter((player) => isPlayable(player));
 }
 
+function appendSecondChanceDiscardEntry(state: InternalGameState, entry: string): void {
+  state.secondChanceStats.discardPile.push(entry);
+  if (state.secondChanceStats.discardPile.length > 80) {
+    state.secondChanceStats.discardPile.splice(0, state.secondChanceStats.discardPile.length - 80);
+  }
+}
+
+function markSecondChanceAppeared(state: InternalGameState, playerName: string): void {
+  state.secondChanceStats.appearedCount += 1;
+  appendSecondChanceDiscardEntry(state, `${playerName} 抽到第二次機會`);
+}
+
+function markSecondChanceBlockedNumber(state: InternalGameState, playerName: string, value: number): void {
+  state.secondChanceStats.blockedNumbers.push(value);
+  if (state.secondChanceStats.blockedNumbers.length > 80) {
+    state.secondChanceStats.blockedNumbers.splice(0, state.secondChanceStats.blockedNumbers.length - 80);
+  }
+  appendSecondChanceDiscardEntry(state, `${playerName} 第二次機會擋下 ${value}`);
+}
+
 function pickFreezeFallbackTarget(state: InternalGameState, chooserPlayerId: string): PlayerState | null {
   const active = getActivePlayers(state);
   if (active.length === 0) return null;
@@ -313,6 +360,8 @@ function pickSecondChanceTransferTarget(state: InternalGameState, fromPlayerId: 
 }
 
 function handleSecondChanceDraw(state: InternalGameState, player: PlayerState): string {
+  markSecondChanceAppeared(state, player.name);
+
   if (!player.secondChance) {
     player.secondChance = true;
     player.cards.push("第二次機會");
@@ -321,11 +370,13 @@ function handleSecondChanceDraw(state: InternalGameState, player: PlayerState): 
 
   const transferTarget = pickSecondChanceTransferTarget(state, player.id);
   if (!transferTarget) {
+    appendSecondChanceDiscardEntry(state, `${player.name} 重複第二次機會無法轉交，棄牌`);
     return `${player.name} 抽到「第二次機會」，但沒有可轉交的 active 玩家，故棄牌。`;
   }
 
   transferTarget.secondChance = true;
   transferTarget.cards.push("第二次機會");
+  appendSecondChanceDiscardEntry(state, `${player.name} 的重複第二次機會轉交給 ${transferTarget.name}`);
   return `${player.name} 抽到重複「第二次機會」，轉交給 ${transferTarget.name}。`;
 }
 
@@ -438,6 +489,7 @@ function applyNormalCardToPlayer(state: InternalGameState, player: PlayerState, 
       if (player.secondChance) {
         player.secondChance = false;
         removeOneCardLabel(player, "第二次機會");
+        markSecondChanceBlockedNumber(state, player.name, card.value);
         recalculateRoundScore(player);
         return {
           message: `${player.name} 抽到重複數字 ${card.value}，但使用了「第二次機會」。`,
@@ -513,6 +565,7 @@ function resolveFlipThreeSequence(
         if (target.secondChance) {
           target.secondChance = false;
           removeOneCardLabel(target, "第二次機會");
+          markSecondChanceBlockedNumber(state, target.name, card.value);
           recalculateRoundScore(target);
           messages.push(`${target.name} 翻到重複數字 ${card.value}，使用了「第二次機會」。`);
           continue;
@@ -597,6 +650,7 @@ function toPublicState(state: InternalGameState): PublicGameState {
     turnOrder: state.turnOrder,
     currentTurnPlayerId: state.currentTurnPlayerId,
     deckCount: state.deck.length,
+    secondChanceStats: state.secondChanceStats,
     message: state.message,
     winner: state.winner,
     updatedAt: state.updatedAt
@@ -616,6 +670,26 @@ function normalizeLoadedState(state: InternalGameState, room: string): InternalG
   }
   if (!Array.isArray(state.deck)) {
     state.deck = createDeck();
+  }
+  if (
+    !state.secondChanceStats ||
+    typeof state.secondChanceStats.appearedCount !== "number" ||
+    !Array.isArray(state.secondChanceStats.blockedNumbers) ||
+    !Array.isArray(state.secondChanceStats.discardPile)
+  ) {
+    state.secondChanceStats = {
+      appearedCount: 0,
+      blockedNumbers: [],
+      discardPile: []
+    };
+  } else {
+    state.secondChanceStats.appearedCount = Math.max(0, Math.floor(state.secondChanceStats.appearedCount));
+    state.secondChanceStats.blockedNumbers = state.secondChanceStats.blockedNumbers.filter(
+      (value) => typeof value === "number" && Number.isFinite(value)
+    );
+    state.secondChanceStats.discardPile = state.secondChanceStats.discardPile.filter(
+      (entry) => typeof entry === "string"
+    );
   }
   if (typeof state.updatedAt !== "number" || Number.isNaN(state.updatedAt)) {
     state.updatedAt = Date.now();
@@ -679,6 +753,13 @@ function clearPendingActionState(state: InternalGameState): void {
   state.pendingActionQueue = [];
 }
 
+function shouldAutoResolveRound(state: InternalGameState): boolean {
+  if (!state.gameStarted) return false;
+  if (state.pendingFreeze || state.pendingFlipThree) return false;
+  if (state.pendingActionQueue.length > 0) return false;
+  return getActivePlayers(state).length === 0;
+}
+
 function resolveRoundAndMaybeStartNext(state: InternalGameState, reasonPrefix = ""): string {
   const nonBusted = state.players.filter((p) => !p.busted);
   let roundSummary = "";
@@ -716,6 +797,11 @@ function resolveRoundAndMaybeStartNext(state: InternalGameState, reasonPrefix = 
 
   state.players.forEach((player) => resetRoundFields(player));
   state.deck = createDeck();
+  state.secondChanceStats = {
+    appearedCount: 0,
+    blockedNumbers: [],
+    discardPile: []
+  };
   state.round += 1;
   clearPendingActionState(state);
   normalizeTurnOrder(state);
@@ -825,6 +911,11 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
       state.round = 1;
       clearPendingActionState(state);
       state.deck = createDeck();
+      state.secondChanceStats = {
+        appearedCount: 0,
+        blockedNumbers: [],
+        discardPile: []
+      };
       state.players.forEach((player) => {
         player.totalScore = 0;
         resetRoundFields(player);
@@ -1079,6 +1170,11 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
       state.turnOrder = [];
       state.currentTurnPlayerId = null;
       state.deck = createDeck();
+      state.secondChanceStats = {
+        appearedCount: 0,
+        blockedNumbers: [],
+        discardPile: []
+      };
       clearRoomPlayerOwnership(ws.data.room);
       writeMessage("房間已重置為全新牌局。");
       break;
@@ -1087,6 +1183,10 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
     default:
       writeMessage("未知操作。");
       break;
+  }
+
+  if (shouldAutoResolveRound(state)) {
+    writeMessage(resolveRoundAndMaybeStartNext(state, `${state.message} `));
   }
 
   ensureCurrentTurn(state);

@@ -219,6 +219,58 @@ describe("Flip 7 ruleset 3.1 alignment", () => {
     expect(state.message.includes("棄牌")).toBe(true);
   });
 
+  test("Round auto-starts next round when all players are passed or busted", () => {
+    const { state, sockets } = setupPlayers(2);
+    const [wsA, wsB] = sockets;
+
+    act(state, wsA, "passSelf");
+    act(state, wsB, "passSelf");
+
+    expect(state.round).toBe(2);
+    expect(state.gameStarted).toBe(true);
+    expect(state.players.every((player) => !player.passed && !player.busted)).toBe(true);
+    expect(state.message.includes("已開始第 2 回合")).toBe(true);
+  });
+
+  test("Second Chance stats track appearances and blocked numbers", () => {
+    const { state, sockets, players } = setupPlayers(2);
+    const [a] = players;
+    const [wsA] = sockets;
+
+    state.deck = [{ kind: "action", action: "second_chance" }];
+    act(state, wsA, "dealSelf");
+    expect(state.secondChanceStats.appearedCount).toBe(1);
+    expect(a.secondChance).toBe(true);
+
+    a.numberCards = [7];
+    a.cards = ["7", "第二次機會"];
+    a.roundScore = 7;
+    state.currentTurnPlayerId = a.id;
+    state.deck = [{ kind: "number", value: 7 }];
+    act(state, wsA, "dealSelf");
+
+    expect(a.secondChance).toBe(false);
+    expect(a.busted).toBe(false);
+    expect(state.secondChanceStats.blockedNumbers).toEqual([7]);
+    expect(state.secondChanceStats.discardPile.some((entry) => entry.includes("擋下 7"))).toBe(true);
+  });
+
+  test("Second Chance stats are reset when a new round starts", () => {
+    const { state, sockets } = setupPlayers(2);
+    const [wsA] = sockets;
+
+    state.secondChanceStats.appearedCount = 3;
+    state.secondChanceStats.blockedNumbers = [2, 7];
+    state.secondChanceStats.discardPile = ["A 抽到第二次機會", "A 第二次機會擋下 7"];
+
+    act(state, wsA, "startNewRound");
+
+    expect(state.round).toBe(2);
+    expect(state.secondChanceStats.appearedCount).toBe(0);
+    expect(state.secondChanceStats.blockedNumbers).toEqual([]);
+    expect(state.secondChanceStats.discardPile).toEqual([]);
+  });
+
   test("Tie at >=200 enters overtime until unique winner", () => {
     const { state, sockets, players } = setupPlayers(2);
     const [a, b] = players;
