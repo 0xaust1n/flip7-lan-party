@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyAction, createInitialState } from "./server";
+import { applyAction, createInitialState } from "./src/server";
 
 type WSStub = {
   data: {

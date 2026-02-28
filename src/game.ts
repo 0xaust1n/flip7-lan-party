@@ -1,8 +1,3 @@
-import { readFile } from "node:fs/promises";
-import { extname, join } from "node:path";
-import { createConnection } from "node:net";
-import { networkInterfaces } from "node:os";
-
 type NumberCard = { kind: "number"; value: number };
 type ActionCard = { kind: "action"; action: "freeze" | "flip_three" | "second_chance" };
 type ModifierCard = { kind: "modifier"; modifier: "plus" | "x2"; value?: number };
@@ -17,13 +12,13 @@ type PendingQueuedAction = {
   chooserPlayerId: string;
   resumeFromPlayerId: string;
 };
-type SecondChanceStats = {
+export type SecondChanceStats = {
   appearedCount: number;
   blockedNumbers: number[];
   discardPile: string[];
 };
 
-type PlayerState = {
+export type PlayerState = {
   id: string;
   name: string;
   cards: string[];
@@ -38,13 +33,13 @@ type PlayerState = {
   passed: boolean;
 };
 
-type WinnerState = {
+export type WinnerState = {
   playerId: string;
   name: string;
   totalScore: number;
 };
 
-type InternalGameState = {
+export type InternalGameState = {
   room: string;
   round: number;
   gameStarted: boolean;
@@ -65,7 +60,7 @@ type InternalGameState = {
   updatedAt: number;
 };
 
-type PublicGameState = {
+export type PublicGameState = {
   room: string;
   round: number;
   gameStarted: boolean;
@@ -84,7 +79,7 @@ type PublicGameState = {
   updatedAt: number;
 };
 
-type ClientAction =
+export type ClientAction =
   | { type: "action"; action: "addPlayer"; payload: { name: string } }
   | { type: "action"; action: "renamePlayer"; payload: { playerId: string; name: string } }
   | { type: "action"; action: "startGame" }
@@ -95,23 +90,21 @@ type ClientAction =
   | { type: "action"; action: "startNewRound" }
   | { type: "action"; action: "resetGame" };
 
+export type ActionClientData = {
+  room: string;
+  clientId: string;
+  claimedPlayerId: string | null;
+};
+
+export type ApplyActionContext = {
+  actor: ActionClientData;
+  getRoomPlayerByClient: (room: string) => Map<string, string>;
+  clearRoomPlayerOwnership: (room: string) => void;
+};
+
 const MAX_PLAYERS = 6;
 const WINNING_SCORE = 200;
 const FREEZE_TARGET_TIMEOUT_MS = 15000;
-const PUBLIC_DIR = join(process.cwd(), "public");
-const DEFAULT_ROOM = "main";
-
-const MIME_TYPES: Record<string, string> = {
-  ".html": "text/html; charset=utf-8",
-  ".js": "application/javascript; charset=utf-8",
-  ".css": "text/css; charset=utf-8",
-  ".json": "application/json; charset=utf-8",
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".svg": "image/svg+xml",
-  ".ico": "image/x-icon"
-};
 
 function createDeck(): Card[] {
   const deck: Card[] = [];
@@ -629,7 +622,7 @@ function resolveFlipThreeSequence(
   };
 }
 
-function toPublicState(state: InternalGameState): PublicGameState {
+export function toPublicState(state: InternalGameState): PublicGameState {
   return {
     room: state.room,
     round: state.round,
@@ -657,7 +650,7 @@ function toPublicState(state: InternalGameState): PublicGameState {
   };
 }
 
-function normalizeLoadedState(state: InternalGameState, room: string): InternalGameState {
+export function normalizeLoadedState(state: InternalGameState, room: string): InternalGameState {
   state.room = room;
   if (!Array.isArray(state.players)) state.players = [];
   if (!Array.isArray(state.turnOrder)) state.turnOrder = [];
@@ -694,7 +687,7 @@ function normalizeLoadedState(state: InternalGameState, room: string): InternalG
   if (typeof state.updatedAt !== "number" || Number.isNaN(state.updatedAt)) {
     state.updatedAt = Date.now();
   }
-  if (!("winner" in state)) {
+  if (!state.winner) {
     state.winner = null;
   }
   if (!Array.isArray(state.pendingActionQueue)) {
@@ -811,12 +804,12 @@ function resolveRoundAndMaybeStartNext(state: InternalGameState, reasonPrefix = 
   return `${reasonPrefix}${roundSummary}${overtimeText}${startText}`.trim();
 }
 
-export function applyAction(state: InternalGameState, action: ClientAction, ws: ServerWebSocket<WSData>): void {
+export function applyAction(state: InternalGameState, action: ClientAction, context: ApplyActionContext): void {
   normalizeTurnOrder(state);
   ensureCurrentTurn(state);
-  const playerByClient = getRoomPlayerByClient(ws.data.room);
-  ws.data.claimedPlayerId = playerByClient.get(ws.data.clientId) || null;
-  const requesterPlayerId = playerByClient.get(ws.data.clientId) || null;
+  const playerByClient = context.getRoomPlayerByClient(context.actor.room);
+  context.actor.claimedPlayerId = playerByClient.get(context.actor.clientId) || null;
+  const requesterPlayerId = playerByClient.get(context.actor.clientId) || null;
   const isRequesterAdmin = Boolean(requesterPlayerId && requesterPlayerId === state.adminPlayerId);
 
   const writeMessage = (msg: string) => {
@@ -849,7 +842,7 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
         writeMessage("遊戲進行中，請下一局再加入玩家。");
         break;
       }
-      if (playerByClient.has(ws.data.clientId)) {
+      if (playerByClient.has(context.actor.clientId)) {
         writeMessage("同一個使用者只能新增一位玩家。");
         break;
       }
@@ -859,8 +852,8 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
       if (!state.adminPlayerId) {
         state.adminPlayerId = player.id;
       }
-      playerByClient.set(ws.data.clientId, player.id);
-      ws.data.claimedPlayerId = player.id;
+      playerByClient.set(context.actor.clientId, player.id);
+      context.actor.claimedPlayerId = player.id;
       ensureCurrentTurn(state);
       if (state.adminPlayerId === player.id) {
         writeMessage(`${name} 加入了遊戲，並成為房主。`);
@@ -877,7 +870,7 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
         writeMessage("改名請求格式錯誤。");
         break;
       }
-      const ownedPlayerId = playerByClient.get(ws.data.clientId) || null;
+      const ownedPlayerId = playerByClient.get(context.actor.clientId) || null;
       if (ownedPlayerId !== playerId) {
         writeMessage("你只能修改自己綁定的玩家名稱。");
         break;
@@ -943,7 +936,7 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
         writeMessage("請先指定「翻三張」的目標玩家。");
         break;
       }
-      const claimedId = playerByClient.get(ws.data.clientId) || null;
+      const claimedId = playerByClient.get(context.actor.clientId) || null;
       if (!claimedId) {
         writeMessage("請先新增你的玩家。");
         break;
@@ -982,7 +975,7 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
         writeMessage("目前沒有待指定的凍結效果。");
         break;
       }
-      const claimedId = playerByClient.get(ws.data.clientId) || null;
+      const claimedId = playerByClient.get(context.actor.clientId) || null;
       if (!claimedId || claimedId !== pending.chooserPlayerId) {
         writeMessage("只有凍結牌持有者可以指定目標。");
         break;
@@ -1011,7 +1004,7 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
         writeMessage("目前沒有待指定的翻三張效果。");
         break;
       }
-      const claimedId = playerByClient.get(ws.data.clientId) || null;
+      const claimedId = playerByClient.get(context.actor.clientId) || null;
       if (!claimedId || claimedId !== pending.sourcePlayerId) {
         writeMessage("只有抽到「翻三張」的玩家可以指定目標。");
         break;
@@ -1058,8 +1051,9 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
       }
 
       const dropped = promoteNextPendingAction(state);
-      if (state.pendingFreeze) {
-        const freezeChooser = getPlayerById(state, state.pendingFreeze.chooserPlayerId);
+      const pendingFreezeAfter = state.pendingFreeze as InternalGameState["pendingFreeze"];
+      if (pendingFreezeAfter) {
+        const freezeChooser = getPlayerById(state, pendingFreezeAfter.chooserPlayerId);
         writeMessage(
           `${source ? source.name : "玩家"} 指定 ${target.name} 連翻三張。${forced.messages.join(" ")} ${
             freezeChooser ? `請 ${freezeChooser.name} 指定凍結目標。` : ""
@@ -1067,8 +1061,9 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
         );
         break;
       }
-      if (state.pendingFlipThree) {
-        const flipChooser = getPlayerById(state, state.pendingFlipThree.sourcePlayerId);
+      const pendingFlipThreeAfter = state.pendingFlipThree as InternalGameState["pendingFlipThree"];
+      if (pendingFlipThreeAfter) {
+        const flipChooser = getPlayerById(state, pendingFlipThreeAfter.sourcePlayerId);
         writeMessage(
           `${source ? source.name : "玩家"} 指定 ${target.name} 連翻三張。${forced.messages.join(" ")} ${
             flipChooser ? `請 ${flipChooser.name} 指定翻三張目標。` : ""
@@ -1100,7 +1095,7 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
         writeMessage("請先指定「翻三張」的目標玩家。");
         break;
       }
-      const claimedId = playerByClient.get(ws.data.clientId) || null;
+      const claimedId = playerByClient.get(context.actor.clientId) || null;
       if (!claimedId) {
         writeMessage("請先新增你的玩家。");
         break;
@@ -1175,7 +1170,7 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
         blockedNumbers: [],
         discardPile: []
       };
-      clearRoomPlayerOwnership(ws.data.room);
+      context.clearRoomPlayerOwnership(context.actor.room);
       writeMessage("房間已重置為全新牌局。");
       break;
     }
@@ -1191,435 +1186,4 @@ export function applyAction(state: InternalGameState, action: ClientAction, ws: 
 
   ensureCurrentTurn(state);
   state.updatedAt = Date.now();
-}
-
-type ParsedResp = { value: unknown; next: number } | null;
-
-function readLine(buffer: Buffer, start: number): { line: string; next: number } | null {
-  const end = buffer.indexOf("\r\n", start, "utf8");
-  if (end === -1) return null;
-  return {
-    line: buffer.toString("utf8", start, end),
-    next: end + 2
-  };
-}
-
-function parseResp(buffer: Buffer, offset = 0): ParsedResp {
-  if (offset >= buffer.length) return null;
-  const prefix = String.fromCharCode(buffer[offset]);
-
-  if (prefix === "+" || prefix === "-" || prefix === ":") {
-    const line = readLine(buffer, offset + 1);
-    if (!line) return null;
-    if (prefix === "+") return { value: line.line, next: line.next };
-    if (prefix === "-") return { value: { redisError: line.line }, next: line.next };
-    return { value: Number(line.line), next: line.next };
-  }
-
-  if (prefix === "$") {
-    const lenLine = readLine(buffer, offset + 1);
-    if (!lenLine) return null;
-    const length = Number(lenLine.line);
-    if (Number.isNaN(length)) throw new Error("Invalid bulk length.");
-    if (length === -1) return { value: null, next: lenLine.next };
-
-    const dataStart = lenLine.next;
-    const dataEnd = dataStart + length;
-    if (buffer.length < dataEnd + 2) return null;
-    const value = buffer.toString("utf8", dataStart, dataEnd);
-    return { value, next: dataEnd + 2 };
-  }
-
-  if (prefix === "*") {
-    const lenLine = readLine(buffer, offset + 1);
-    if (!lenLine) return null;
-    const count = Number(lenLine.line);
-    if (Number.isNaN(count)) throw new Error("Invalid array length.");
-    if (count === -1) return { value: null, next: lenLine.next };
-
-    const values: unknown[] = [];
-    let cursor = lenLine.next;
-    for (let i = 0; i < count; i += 1) {
-      const parsed = parseResp(buffer, cursor);
-      if (!parsed) return null;
-      values.push(parsed.value);
-      cursor = parsed.next;
-    }
-    return { value: values, next: cursor };
-  }
-
-  throw new Error(`Unsupported RESP prefix: ${prefix}`);
-}
-
-function encodeCommand(args: string[]): string {
-  let out = `*${args.length}\r\n`;
-  for (const arg of args) {
-    const byteLen = Buffer.byteLength(arg, "utf8");
-    out += `$${byteLen}\r\n${arg}\r\n`;
-  }
-  return out;
-}
-
-class RedisClientLite {
-  private readonly host: string;
-  private readonly port: number;
-
-  constructor(host: string, port: number) {
-    this.host = host;
-    this.port = port;
-  }
-
-  async command(args: string[]): Promise<unknown> {
-    return new Promise((resolve, reject) => {
-      const socket = createConnection({ host: this.host, port: this.port });
-      let buffer = Buffer.alloc(0);
-      const timeout = setTimeout(() => {
-        socket.destroy();
-        reject(new Error("Redis command timeout."));
-      }, 1500);
-
-      socket.once("error", (error) => {
-        clearTimeout(timeout);
-        reject(error);
-      });
-
-      socket.on("data", (chunk: Buffer) => {
-        buffer = Buffer.concat([buffer, chunk]);
-        try {
-          const parsed = parseResp(buffer, 0);
-          if (!parsed) return;
-
-          clearTimeout(timeout);
-          socket.end();
-          if (
-            parsed.value &&
-            typeof parsed.value === "object" &&
-            "redisError" in (parsed.value as Record<string, unknown>)
-          ) {
-            reject(new Error(String((parsed.value as { redisError: unknown }).redisError)));
-            return;
-          }
-          resolve(parsed.value);
-        } catch (error) {
-          clearTimeout(timeout);
-          socket.destroy();
-          reject(error);
-        }
-      });
-
-      socket.on("connect", () => {
-        socket.write(encodeCommand(args));
-      });
-    });
-  }
-}
-
-class GameStore {
-  private readonly keyPrefix = "flip7:room:";
-  private readonly memory = new Map<string, InternalGameState>();
-  private redis: RedisClientLite | null = null;
-
-  constructor() {
-    const redisUrlRaw = process.env.REDIS_URL;
-    if (!redisUrlRaw) {
-      console.log("REDIS_URL 未設定，將使用記憶體模式。");
-      this.redis = null;
-      return;
-    }
-
-    try {
-      const redisUrl = new URL(redisUrlRaw);
-      const host = redisUrl.hostname;
-      const port = Number(redisUrl.port || 6379);
-      this.redis = new RedisClientLite(host, port);
-    } catch {
-      console.log("REDIS_URL 格式錯誤，將使用記憶體模式。");
-      this.redis = null;
-    }
-  }
-
-  async init(): Promise<void> {
-    if (!this.redis) return;
-    try {
-      await this.redis.command(["PING"]);
-      console.log("Redis connected.");
-    } catch {
-      this.redis = null;
-      console.log("Redis unavailable, using in-memory state.");
-    }
-  }
-
-  private key(room: string): string {
-    return `${this.keyPrefix}${room}`;
-  }
-
-  async get(room: string): Promise<InternalGameState> {
-    if (this.redis) {
-      try {
-        const raw = await this.redis.command(["GET", this.key(room)]);
-        if (typeof raw === "string") {
-          const parsed = normalizeLoadedState(JSON.parse(raw) as InternalGameState, room);
-          this.memory.set(room, parsed);
-          return structuredClone(parsed);
-        }
-      } catch {
-        this.redis = null;
-        console.log("Redis read failed, switched to in-memory state.");
-      }
-    }
-
-    const cached = this.memory.get(room);
-    if (cached) {
-      const normalized = normalizeLoadedState(structuredClone(cached), room);
-      this.memory.set(room, normalized);
-      return structuredClone(normalized);
-    }
-
-    const fresh = createInitialState(room);
-    this.memory.set(room, fresh);
-    return structuredClone(fresh);
-  }
-
-  async set(room: string, state: InternalGameState): Promise<void> {
-    const normalized = normalizeLoadedState(structuredClone(state), room);
-    this.memory.set(room, normalized);
-
-    if (!this.redis) return;
-    try {
-      await this.redis.command(["SET", this.key(room), JSON.stringify(normalized)]);
-    } catch {
-      this.redis = null;
-      console.log("Redis write failed, switched to in-memory state.");
-    }
-  }
-}
-
-type WSData = {
-  room: string;
-  clientId: string;
-  claimedPlayerId: string | null;
-};
-
-const store = new GameStore();
-
-const roomLocks = new Map<string, Promise<void>>();
-const roomClients = new Map<string, Set<ServerWebSocket<WSData>>>();
-const roomPlayerByClient = new Map<string, Map<string, string>>();
-
-function withRoomLock<T>(room: string, task: () => Promise<T>): Promise<T> {
-  const previous = roomLocks.get(room) || Promise.resolve();
-
-  let release: () => void = () => {};
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-
-  const run = previous
-    .catch(() => undefined)
-    .then(task)
-    .finally(() => {
-      release();
-    });
-
-  roomLocks.set(room, gate);
-  return run;
-}
-
-function getRoomClients(room: string): Set<ServerWebSocket<WSData>> {
-  if (!roomClients.has(room)) {
-    roomClients.set(room, new Set());
-  }
-  return roomClients.get(room)!;
-}
-
-function getRoomPlayerByClient(room: string): Map<string, string> {
-  if (!roomPlayerByClient.has(room)) {
-    roomPlayerByClient.set(room, new Map());
-  }
-  return roomPlayerByClient.get(room)!;
-}
-
-function clearRoomPlayerOwnership(room: string): void {
-  getRoomPlayerByClient(room).clear();
-  const clients = getRoomClients(room);
-  clients.forEach((socket) => {
-    socket.data.claimedPlayerId = null;
-  });
-}
-
-function sanitizeUserId(input: string | null): string {
-  if (!input) return crypto.randomUUID();
-  const trimmed = input.trim();
-  if (!trimmed) return crypto.randomUUID();
-  return trimmed.slice(0, 128);
-}
-
-async function pushState(room: string): Promise<void> {
-  const state = await store.get(room);
-  const validIds = new Set(state.players.map((p) => p.id));
-  const ownerMap = getRoomPlayerByClient(room);
-  Array.from(ownerMap.entries()).forEach(([clientId, playerId]) => {
-    if (!validIds.has(playerId)) ownerMap.delete(clientId);
-  });
-  const clients = getRoomClients(room);
-
-  clients.forEach((ws) => {
-    try {
-      const claimedPlayerId = ownerMap.get(ws.data.clientId) || null;
-      ws.data.claimedPlayerId = claimedPlayerId;
-      ws.send(
-        JSON.stringify({
-          type: "state",
-          state: toPublicState(state),
-          you: {
-            clientId: ws.data.clientId,
-            claimedPlayerId
-          }
-        })
-      );
-    } catch {
-      // Ignore failed sends.
-    }
-  });
-}
-
-async function sendStateToSocket(ws: ServerWebSocket<WSData>): Promise<void> {
-  const state = await store.get(ws.data.room);
-  const validIds = new Set(state.players.map((p) => p.id));
-  const ownerMap = getRoomPlayerByClient(ws.data.room);
-  Array.from(ownerMap.entries()).forEach(([clientId, playerId]) => {
-    if (!validIds.has(playerId)) ownerMap.delete(clientId);
-  });
-  const claimedPlayerId = ownerMap.get(ws.data.clientId) || null;
-  ws.data.claimedPlayerId = claimedPlayerId;
-  ws.send(
-    JSON.stringify({
-      type: "state",
-      state: toPublicState(state),
-      you: {
-        clientId: ws.data.clientId,
-        claimedPlayerId
-      }
-    })
-  );
-}
-
-async function handleAction(ws: ServerWebSocket<WSData>, action: ClientAction): Promise<void> {
-  const room = ws.data.room;
-  await withRoomLock(room, async () => {
-    const state = await store.get(room);
-    applyAction(state, action, ws);
-    await store.set(room, state);
-    await pushState(room);
-  });
-}
-
-async function handleStaticRequest(req: Request): Promise<Response> {
-  const url = new URL(req.url);
-  const pathname = url.pathname === "/" ? "/index.html" : url.pathname;
-  const safePath = pathname.replace(/\.\./g, "");
-  const filePath = join(PUBLIC_DIR, safePath);
-
-  try {
-    const file = await readFile(filePath);
-    const contentType = MIME_TYPES[extname(filePath)] || "application/octet-stream";
-    return new Response(file, {
-      headers: {
-        "content-type": contentType,
-        "cache-control": "no-store"
-      }
-    });
-  } catch {
-    return new Response("Not Found", { status: 404 });
-  }
-}
-
-function getLanIps(): string[] {
-  const nets = networkInterfaces();
-  const ips: string[] = [];
-
-  Object.values(nets).forEach((entries) => {
-    (entries || []).forEach((entry) => {
-      if (entry.family === "IPv4" && !entry.internal) {
-        ips.push(entry.address);
-      }
-    });
-  });
-
-  return ips;
-}
-
-function startServer() {
-  const requestedPort = Number(process.env.PORT || 3000);
-  const portsToTry = process.env.PORT
-    ? [requestedPort]
-    : [...Array.from({ length: 20 }, (_, i) => requestedPort + i), 0];
-
-  for (const port of portsToTry) {
-    try {
-      const server = Bun.serve<WSData>({
-        hostname: "0.0.0.0",
-        port,
-        websocket: {
-          open(ws) {
-            getRoomClients(ws.data.room).add(ws);
-            void sendStateToSocket(ws);
-          },
-          message(ws, message) {
-            try {
-              const parsed = JSON.parse(String(message)) as ClientAction;
-              if (!parsed || parsed.type !== "action") {
-                ws.send(JSON.stringify({ type: "error", message: "訊息格式錯誤。" }));
-                return;
-              }
-              void handleAction(ws, parsed);
-            } catch {
-              ws.send(JSON.stringify({ type: "error", message: "JSON 格式錯誤。" }));
-            }
-          },
-          close(ws) {
-            const clients = getRoomClients(ws.data.room);
-            clients.delete(ws);
-            void pushState(ws.data.room);
-          }
-        },
-        async fetch(req, serverInstance) {
-          const url = new URL(req.url);
-          if (url.pathname === "/ws") {
-            const room = (url.searchParams.get("room") || DEFAULT_ROOM).trim() || DEFAULT_ROOM;
-            const userId = sanitizeUserId(url.searchParams.get("userId"));
-            const ok = serverInstance.upgrade(req, {
-              data: {
-                room,
-                clientId: userId,
-                claimedPlayerId: null
-              }
-            });
-            if (ok) return;
-            return new Response("WebSocket upgrade failed", { status: 400 });
-          }
-
-          return handleStaticRequest(req);
-        }
-      });
-
-      const urls = [`http://localhost:${server.port}`, ...getLanIps().map((ip) => `http://${ip}:${server.port}`)];
-      console.log("Flip 7 multiplayer server running:");
-      urls.forEach((url) => console.log(`- ${url}`));
-      console.log("WebSocket endpoint: /ws?room=main");
-      return server;
-    } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "EADDRINUSE") {
-        continue;
-      }
-      throw error;
-    }
-  }
-
-  throw new Error("Unable to find an open port.");
-}
-
-if (import.meta.main) {
-  await store.init();
-  startServer();
 }

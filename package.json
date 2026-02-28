@@ -4,7 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "bun --env-file=.env --hot server.ts",
-    "start": "bun --env-file=.env server.ts"
+    "dev": "bun --env-file=.env --hot src/server.ts",
+    "start": "bun --env-file=.env src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.2",
+    "bun-types": "^1.3.10",
+    "typescript": "^5.9.3"
   }
 }
