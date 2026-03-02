@@ -180,6 +180,14 @@ function App() {
     if (!game || !you.claimedPlayerId) return null;
     return game.players.find((player) => player.id === you.claimedPlayerId) || null;
   }, [game, you.claimedPlayerId]);
+  const leaderboard = useMemo(() => {
+    if (!game) return [];
+    return [...game.players].sort((a, b) => {
+      if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
+      if (b.roundScore !== a.roundScore) return b.roundScore - a.roundScore;
+      return a.name.localeCompare(b.name, "zh-Hant");
+    });
+  }, [game]);
 
   const isAdmin = Boolean(game && myPlayer && game.adminPlayerId === myPlayer.id);
   const pendingFreeze = game ? game.pendingFreeze : null;
@@ -478,6 +486,44 @@ function App() {
         </div>
 
         <aside className="space-y-6">
+          <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
+            <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">排行榜</h2>
+            ${leaderboard.length === 0
+              ? html`<p className="text-sm text-slate-500">目前沒有可顯示的分數。</p>`
+              : html`
+                  <ol className="space-y-2">
+                    ${leaderboard.map((player, index) => {
+                      const isMe = you.claimedPlayerId === player.id;
+                      const isWinner = Boolean(game && game.winner && game.winner.id === player.id);
+
+                      return html`
+                        <li
+                          key=${`rank-${player.id}`}
+                          className=${`flex items-center justify-between rounded-lg border px-3 py-2 ${
+                            isWinner
+                              ? "border-cyan-500/50 bg-cyan-500/10"
+                              : isMe
+                                ? "border-emerald-500/40 bg-emerald-500/10"
+                                : "border-slate-800 bg-slate-950"
+                          }`}
+                        >
+                          <div className="flex min-w-0 items-center gap-2">
+                            <span className="font-mono text-xs text-slate-400">#${index + 1}</span>
+                            <span className="truncate text-sm font-semibold text-slate-100">${player.name}</span>
+                            ${isMe ? html`<span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">你</span>` : null}
+                            ${isWinner ? html`<span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">WIN</span>` : null}
+                          </div>
+                          <div className="text-right">
+                            <p className="font-mono text-sm font-bold text-slate-100">${player.totalScore}</p>
+                            <p className="text-[10px] text-slate-500">本局 ${player.roundScore}</p>
+                          </div>
+                        </li>
+                      `;
+                    })}
+                  </ol>
+                `}
+          </div>
+
           <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
             <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">管理控制台</h2>
             ${isAdmin
