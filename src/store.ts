@@ -63,9 +63,8 @@ export class GameStore {
 
     const cached = this.memory.get(room);
     if (cached) {
-      const normalized = normalizeLoadedState(structuredClone(cached), room);
-      this.memory.set(room, normalized);
-      return structuredClone(normalized);
+      normalizeLoadedState(cached, room);
+      return structuredClone(cached);
     }
 
     const fresh = createInitialState(room);
@@ -74,12 +73,13 @@ export class GameStore {
   }
 
   async set(room: string, state: InternalGameState): Promise<void> {
-    const normalized = normalizeLoadedState(structuredClone(state), room);
-    this.memory.set(room, normalized);
+    const normalized = normalizeLoadedState(state, room);
+    const snapshot = structuredClone(normalized);
+    this.memory.set(room, snapshot);
 
     if (this.redis) {
       try {
-        await this.redis.set(this.key(room), JSON.stringify(normalized));
+        await this.redis.set(this.key(room), JSON.stringify(snapshot));
       } catch (err) {
         console.error("Redis write failed:", err);
       }

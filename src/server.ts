@@ -51,14 +51,15 @@ function sanitizeUserId(input: string | null): string {
   return trimmed.slice(0, 128);
 }
 
-async function pushState(room: string): Promise<void> {
-  const state = await store.get(room);
+async function pushState(room: string, stateOverride?: InternalGameState): Promise<void> {
+  const state = stateOverride ?? (await store.get(room));
   const validIds = new Set(state.players.map((p) => p.id));
   const ownerMap = getRoomPlayerByClient(room);
   Array.from(ownerMap.entries()).forEach(([clientId, playerId]) => {
     if (!validIds.has(playerId)) ownerMap.delete(clientId);
   });
   const clients = getRoomClients<WSData>(room);
+  const publicState = toPublicState(state);
 
   clients.forEach((ws) => {
     try {
@@ -67,7 +68,7 @@ async function pushState(room: string): Promise<void> {
       ws.send(
         JSON.stringify({
           type: "state",
-          state: toPublicState(state),
+          state: publicState,
           you: {
             clientId: ws.data.clientId,
             claimedPlayerId
@@ -107,7 +108,7 @@ async function handleAction(ws: ServerWebSocket<WSData>, action: ClientAction): 
     const state = await store.get(room);
     applyAction(state, action, ws.data);
     await store.set(room, state);
-    await pushState(room);
+    await pushState(room, state);
   });
 }
 
@@ -147,18 +148,27 @@ function getLanIps(): string[] {
 }
 
 function setupBackgroundTimers() {
+  let tickInProgress = false;
+
   setInterval(async () => {
-    const activeRooms = await store.getAllActiveRooms();
-    for (const room of activeRooms) {
-      await withRoomLock(room, async () => {
-        const state = await store.get(room);
-        const timeoutMessage = handleTurnTimeout(state);
-        if (timeoutMessage) {
-          state.message = timeoutMessage;
-          await store.set(room, state);
-          await pushState(room);
-        }
-      });
+    if (tickInProgress) return;
+    tickInProgress = true;
+
+    try {
+      const activeRooms = await store.getAllActiveRooms();
+      for (const room of activeRooms) {
+        await withRoomLock(room, async () => {
+          const state = await store.get(room);
+          const timeoutMessage = handleTurnTimeout(state);
+          if (timeoutMessage) {
+            state.message = timeoutMessage;
+            await store.set(room, state);
+            await pushState(room, state);
+          }
+        });
+      }
+    } finally {
+      tickInProgress = false;
     }
   }, 1000);
 }

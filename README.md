@@ -14,7 +14,7 @@ A multiplayer Flip 7-inspired game server built with Bun + WebSocket. Refactored
 
 - **Runtime**: [Bun](https://bun.sh/)
 - **Language**: TypeScript
-- **Frontend**: React (ESM via CDN) + Tailwind CSS + htm (Hyperscript Tagged Markup)
+- **Frontend**: React + Tailwind CSS + htm (bundled to static assets via Bun build)
 - **Networking**: Bun WebSocket + Built-in HTTP Server
 - **Database**: Redis (via `ioredis`)
 
@@ -42,6 +42,7 @@ A multiplayer Flip 7-inspired game server built with Bun + WebSocket. Refactored
 
 - `bun run dev` - Start server with hot reload (`bun --hot`)
 - `bun run start` - Start production server
+- `bun run build:client` - Build frontend bundles into `public/`
 - `bun test` - Run the logic validation suite in `tests/`
 - `bun run typecheck` - Run TypeScript compiler checks
 
@@ -59,8 +60,11 @@ A multiplayer Flip 7-inspired game server built with Bun + WebSocket. Refactored
 - `src/store.ts` - Multi-layered state storage (Redis + Memory).
 - `src/rooms.ts` - Room-based mutual exclusion locking and client management.
 - `tests/server.test.ts` - Comprehensive ruleset validation suite.
-- `public/index.html` - Minimal HTML shell with integrated Tailwind styles.
-- `public/app.js` - Modern React frontend with hooks and real-time state sync.
+- `src/client/app.js` - Frontend source (React + htm).
+- `src/client/styles.css` - Tailwind entry and custom animations/styles.
+- `public/index.html` - HTML shell for static frontend assets.
+- `public/app.js` - Bundled frontend output.
+- `public/styles.css` - Bundled Tailwind CSS output.
 
 ## Game Rules (Summary)
 
