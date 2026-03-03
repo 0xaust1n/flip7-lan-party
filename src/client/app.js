@@ -2,11 +2,15 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import htm from "htm";
 
+import { LOCALES, getInitialLocale, persistLocale, t as i18n, translateCardLabel } from "./i18n";
+
 const html = htm.bind(React.createElement);
 const roomFromQuery = (new URLSearchParams(window.location.search).get("room") || "").trim();
 const HAS_SELECTED_ROOM = roomFromQuery.length > 0;
 const ROOM = HAS_SELECTED_ROOM ? roomFromQuery : "main";
 const USER_KEY = "flip7_user_uuid";
+const LEGACY_USER_KEY = "uid";
+const UID_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10;
 
 function makeSessionId() {
   if (globalThis.crypto && typeof globalThis.crypto.randomUUID === "function") {
@@ -15,16 +19,69 @@ function makeSessionId() {
   return `sid_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function getUserId() {
-  try {
-    const existing = localStorage.getItem(USER_KEY);
-    if (existing && existing.trim()) return existing;
-    const created = makeSessionId();
-    localStorage.setItem(USER_KEY, created);
-    return created;
-  } catch {
-    return makeSessionId();
+function normalizeStoredId(value) {
+  const id = String(value || "").trim();
+  return id ? id : "";
+}
+
+function readCookie(name) {
+  const target = `${encodeURIComponent(name)}=`;
+  const parts = document.cookie ? document.cookie.split("; ") : [];
+  for (const part of parts) {
+    if (part.startsWith(target)) {
+      try {
+        return decodeURIComponent(part.slice(target.length));
+      } catch {
+        return part.slice(target.length);
+      }
+    }
   }
+  return "";
+}
+
+function writeCookie(name, value) {
+  const parts = [
+    `${encodeURIComponent(name)}=${encodeURIComponent(value)}`,
+    `Max-Age=${UID_COOKIE_MAX_AGE_SECONDS}`,
+    "Path=/",
+    "SameSite=Lax"
+  ];
+  if (window.location.protocol === "https:") {
+    parts.push("Secure");
+  }
+  document.cookie = parts.join("; ");
+}
+
+function persistUserId(userId) {
+  const id = normalizeStoredId(userId);
+  if (!id) return "";
+  try {
+    localStorage.setItem(USER_KEY, id);
+    localStorage.setItem(LEGACY_USER_KEY, id);
+  } catch {
+    // Ignore localStorage access errors.
+  }
+  writeCookie(USER_KEY, id);
+  return id;
+}
+
+function getUserId() {
+  let fromStorage = "";
+  try {
+    fromStorage = normalizeStoredId(localStorage.getItem(USER_KEY));
+    if (!fromStorage) {
+      fromStorage = normalizeStoredId(localStorage.getItem(LEGACY_USER_KEY));
+    }
+  } catch {
+    // Ignore localStorage access errors.
+  }
+
+  if (fromStorage) return persistUserId(fromStorage);
+
+  const fromCookie = normalizeStoredId(readCookie(USER_KEY));
+  if (fromCookie) return persistUserId(fromCookie);
+
+  return persistUserId(makeSessionId());
 }
 
 const USER_ID = getUserId();
@@ -35,10 +92,31 @@ function connectionBadge(status) {
   return "bg-slate-700 text-slate-300 border-slate-500";
 }
 
-function connectionLabel(status) {
-  if (status === "connected") return "已連線";
-  if (status === "reconnecting") return "重新連線中";
-  return "連線中";
+function connectionLabel(status, t) {
+  if (status === "connected") return t("connectionConnected");
+  if (status === "reconnecting") return t("connectionReconnecting");
+  return t("connectionConnecting");
+}
+
+function LanguageSelector({ locale, onChange, t }) {
+  return html`
+    <div className="inline-flex items-center gap-1 rounded-full border border-slate-700 bg-slate-950/80 p-1 text-xs">
+      <span className="px-2 text-slate-400">${t("languageLabel")}</span>
+      ${LOCALES.map((option) => html`
+        <button
+          key=${option.code}
+          onClick=${() => onChange(option.code)}
+          className=${`rounded-full px-2.5 py-1 font-semibold transition ${
+            locale === option.code
+              ? "bg-cyan-500 text-slate-950"
+              : "text-slate-300 hover:bg-slate-800"
+          }`}
+        >
+          ${t(option.labelKey)}
+        </button>
+      `)}
+    </div>
+  `;
 }
 
 function TimerBar({ turnStartedAt }) {
@@ -76,6 +154,10 @@ function TimerBar({ turnStartedAt }) {
 }
 
 function App() {
+  const [locale, setLocale] = useState(getInitialLocale);
+  const t = useMemo(() => (key, params = {}) => i18n(locale, key, params), [locale]);
+  const localeRef = useRef(locale);
+
   const [game, setGame] = useState(null);
   const [status, setStatus] = useState(HAS_SELECTED_ROOM ? "connecting" : "idle");
   const [error, setError] = useState("");
@@ -92,6 +174,22 @@ function App() {
   const lastGameMessageRef = useRef("");
 
   useEffect(() => {
+    localeRef.current = locale;
+  }, [locale]);
+
+  useEffect(() => {
+    persistLocale(locale);
+    const params = new URLSearchParams(window.location.search);
+    params.set("lang", locale);
+    const query = params.toString();
+    const nextUrl = `${window.location.pathname}${query ? `?${query}` : ""}${window.location.hash}`;
+    window.history.replaceState(null, "", nextUrl);
+
+    document.documentElement.lang = locale === "en" ? "en" : "zh-Hant";
+    document.title = i18n(locale, "appTitle");
+  }, [locale]);
+
+  useEffect(() => {
     if (!HAS_SELECTED_ROOM) return;
 
     let stopped = false;
@@ -101,7 +199,7 @@ function App() {
 
       const protocol = window.location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(
-        `${protocol}://${window.location.host}/ws?room=${encodeURIComponent(ROOM)}&userId=${encodeURIComponent(USER_ID)}`
+        `${protocol}://${window.location.host}/ws?room=${encodeURIComponent(ROOM)}&userId=${encodeURIComponent(USER_ID)}&lang=${encodeURIComponent(localeRef.current)}`
       );
       wsRef.current = ws;
       setStatus("connecting");
@@ -118,10 +216,10 @@ function App() {
             setGame(data.state);
             setYou(data.you || { clientId: "", claimedPlayerId: null });
           } else if (data.type === "error") {
-            setError(data.message || "伺服器錯誤。");
+            setError(data.message || i18n(localeRef.current, "errorsServer"));
           }
         } catch {
-          setError("無法解析伺服器回應。");
+          setError(i18n(localeRef.current, "errorsParseResponse"));
         }
       };
 
@@ -180,14 +278,16 @@ function App() {
     if (!game || !you.claimedPlayerId) return null;
     return game.players.find((player) => player.id === you.claimedPlayerId) || null;
   }, [game, you.claimedPlayerId]);
+
   const leaderboard = useMemo(() => {
     if (!game) return [];
+    const sortingLocale = locale === "en" ? "en" : "zh-Hant";
     return [...game.players].sort((a, b) => {
       if (b.totalScore !== a.totalScore) return b.totalScore - a.totalScore;
       if (b.roundScore !== a.roundScore) return b.roundScore - a.roundScore;
-      return a.name.localeCompare(b.name, "zh-Hant");
+      return a.name.localeCompare(b.name, sortingLocale);
     });
-  }, [game]);
+  }, [game, locale]);
 
   const isAdmin = Boolean(game && myPlayer && game.adminPlayerId === myPlayer.id);
   const pendingFreeze = game ? game.pendingFreeze : null;
@@ -203,17 +303,6 @@ function App() {
   const secondChanceStats = game
     ? game.secondChanceStats || { appearedCount: 0, blockedNumbers: [], discardPile: [] }
     : { appearedCount: 0, blockedNumbers: [], discardPile: [] };
-
-  const hasPlayers = Boolean(game && game.players.length > 0);
-  const canAct = Boolean(
-    game &&
-      game.gameStarted &&
-      currentPlayer &&
-      myPlayer &&
-      currentPlayer.id === myPlayer.id &&
-      !game.winner &&
-      status === "connected"
-  );
 
   const pushToast = (text, kind = "info") => {
     const message = String(text || "").trim();
@@ -242,7 +331,7 @@ function App() {
 
   const sendAction = (action, payload = {}) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
-      setError("尚未連線到伺服器。");
+      setError(t("errorsNotConnected"));
       return;
     }
     wsRef.current.send(JSON.stringify({ type: "action", action, payload }));
@@ -279,6 +368,7 @@ function App() {
     if (!room) return;
     const params = new URLSearchParams(window.location.search);
     params.set("room", room);
+    params.set("lang", locale);
     window.location.search = params.toString();
   };
 
@@ -286,8 +376,11 @@ function App() {
     return html`
       <main className="mx-auto flex min-h-screen w-full max-w-xl items-center px-4 py-8">
         <section className="w-full rounded-2xl border border-slate-800 bg-slate-900/80 p-6 shadow-xl backdrop-blur-sm">
-          <h1 className="text-2xl font-bold tracking-tight text-cyan-400">Flip 7 Lan Party</h1>
-          <p className="mt-2 text-sm text-slate-300">先輸入房間名稱再加入遊戲。</p>
+          <div className="mb-4 flex justify-end">
+            <${LanguageSelector} locale=${locale} onChange=${setLocale} t=${t} />
+          </div>
+          <h1 className="text-2xl font-bold tracking-tight text-cyan-400">${t("appTitle")}</h1>
+          <p className="mt-2 text-sm text-slate-300">${t("joinPrompt")}</p>
 
           <form className="mt-5 flex flex-col gap-3 sm:flex-row" onSubmit=${onSubmitJoinRoom}>
             <input
@@ -295,7 +388,7 @@ function App() {
               value=${roomInput}
               onChange=${(e) => setRoomInput(e.target.value)}
               maxLength="64"
-              placeholder="例如：main 或 party-01"
+              placeholder=${t("roomPlaceholder")}
               className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
               required
             />
@@ -303,7 +396,7 @@ function App() {
               type="submit"
               className="whitespace-nowrap rounded-lg bg-cyan-500 px-4 py-2 font-bold text-slate-950 transition hover:bg-cyan-400"
             >
-              加入房間
+              ${t("joinRoomButton")}
             </button>
           </form>
         </section>
@@ -316,20 +409,25 @@ function App() {
       <header className="mb-6 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl backdrop-blur-sm">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-cyan-400 sm:text-3xl">Flip 7 Lan Party</h1>
-            <p className="mt-1 text-sm text-slate-300">房間：<span className="font-semibold text-slate-100">${ROOM}</span></p>
-            <p className="mt-1 text-xs text-slate-400">我的座位：<span className="font-semibold">${myPlayer ? myPlayer.name : "尚未加入"}</span></p>
+            <h1 className="text-2xl font-bold tracking-tight text-cyan-400 sm:text-3xl">${t("appTitle")}</h1>
+            <p className="mt-1 text-sm text-slate-300">${t("roomLabel")}：<span className="font-semibold text-slate-100">${ROOM}</span></p>
+            <p className="mt-1 text-xs text-slate-400">${t("mySeatLabel")}：<span className="font-semibold">${myPlayer ? myPlayer.name : t("mySeatNotJoined")}</span></p>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <span className=${`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${connectionBadge(status)}`}>
-              ${connectionLabel(status)}
-            </span>
-            <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs text-slate-300">
-              回合 ${game ? game.round : "-"}
-            </span>
-            <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs text-slate-300">
-              ${game && game.gameStarted ? "遊戲進行中" : "等待中"}
-            </span>
+          <div className="space-y-2">
+            <div className="flex justify-end">
+              <${LanguageSelector} locale=${locale} onChange=${setLocale} t=${t} />
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <span className=${`rounded-full border px-3 py-1 text-xs font-semibold uppercase tracking-wide ${connectionBadge(status)}`}>
+                ${connectionLabel(status, t)}
+              </span>
+              <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs text-slate-300">
+                ${t("roundPill", { round: game ? game.round : "-" })}
+              </span>
+              <span className="rounded-full border border-slate-700 bg-slate-950 px-3 py-1 text-xs text-slate-300">
+                ${game && game.gameStarted ? t("gameInProgress") : t("gameWaiting")}
+              </span>
+            </div>
           </div>
         </div>
       </header>
@@ -337,8 +435,8 @@ function App() {
       <section className="grid gap-6 lg:grid-cols-3">
         <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5 lg:col-span-2">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
-            <h2 className="text-lg font-semibold">遊戲桌面</h2>
-            <p className="text-xs text-slate-400">${game ? `${game.players.length} / 6` : "0 / 6"} 玩家</p>
+            <h2 className="text-lg font-semibold">${t("gameTableTitle")}</h2>
+            <p className="text-xs text-slate-400">${t("playersCount", { count: game ? game.players.length : 0, max: 6 })}</p>
           </div>
 
           ${!myPlayer && game && !game.gameStarted
@@ -350,7 +448,7 @@ function App() {
                       value=${newPlayerName}
                       onChange=${(e) => setNewPlayerName(e.target.value)}
                       maxLength="20"
-                      placeholder="輸入您的暱稱"
+                      placeholder=${t("nicknamePlaceholder")}
                       className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
                       required
                     />
@@ -361,7 +459,7 @@ function App() {
                       disabled=${status !== "connected" || game.players.length >= 6}
                       className="w-full whitespace-nowrap rounded-lg bg-cyan-500 py-2 font-bold text-slate-950 transition hover:bg-cyan-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
                     >
-                      加入戰局
+                      ${t("joinBattle")}
                     </button>
                   </div>
                 </form>
@@ -370,7 +468,7 @@ function App() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             ${!game || game.players.length === 0
-              ? html`<div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-slate-800 py-10 text-slate-500 sm:col-span-2">目前沒有玩家加入</div>`
+              ? html`<div className="flex h-32 items-center justify-center rounded-xl border border-dashed border-slate-800 py-10 text-slate-500 sm:col-span-2">${t("noPlayers")}</div>`
               : game.players.map((player) => {
                   const isCurrentTurn = game.currentTurnPlayerId === player.id;
                   const isMine = you.claimedPlayerId === player.id;
@@ -393,12 +491,18 @@ function App() {
                             disabled=${!isMine || !!game.winner}
                           />
                           <p className=${`text-xs ${isActive ? "text-emerald-400 font-semibold" : "text-slate-500"}`}>
-                            ${player.busted ? "爆牌" : player.passed ? "已停牌" : isActive ? "行動中" : "等待"}
+                            ${player.busted
+                              ? t("playerStateBusted")
+                              : player.passed
+                                ? t("playerStatePassed")
+                                : isActive
+                                  ? t("playerStateActive")
+                                  : t("playerStateWaiting")}
                           </p>
                         </div>
                         <div className="flex flex-col items-end gap-1">
                           <span className="text-xl font-bold text-cyan-400">${player.roundScore}</span>
-                          <span className="text-[10px] uppercase tracking-wider text-slate-500">本局得分</span>
+                          <span className="text-[10px] uppercase tracking-wider text-slate-500">${t("roundScoreLabel")}</span>
                         </div>
                       </div>
 
@@ -406,17 +510,17 @@ function App() {
 
                       <div className="mt-4 flex flex-wrap gap-1.5">
                         ${player.cards.length === 0
-                          ? html`<span className="text-xs italic text-slate-600">無手牌</span>`
+                          ? html`<span className="text-xs italic text-slate-600">${t("noCards")}</span>`
                           : player.cards.map((card, idx) => html`
                               <span key=${`${player.id}-${card}-${idx}`} className="card-item inline-flex rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs font-medium text-slate-200 shadow-sm">
-                                ${card}
+                                ${translateCardLabel(locale, card)}
                               </span>
                             `)}
                       </div>
 
                       <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-3 text-xs text-slate-400">
-                        <span>總分: <b className="text-slate-200">${player.totalScore}</b></span>
-                        <span>${player.secondChance ? html`<span className="text-emerald-400">★ 第二次機會</span>` : ""}</span>
+                        <span>${t("totalScoreLabel")}: <b className="text-slate-200">${player.totalScore}</b></span>
+                        <span>${player.secondChance ? html`<span className="text-emerald-400">★ ${t("secondChanceLabel")}</span>` : ""}</span>
                       </div>
 
                       ${isMine && isActive && !game.winner && !pendingFlipThree && !pendingFreeze
@@ -426,13 +530,13 @@ function App() {
                                 onClick=${() => sendAction("dealSelf")}
                                 className="rounded-lg bg-cyan-500 py-2.5 text-sm font-bold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400"
                               >
-                                抽牌
+                                ${t("actionDeal")}
                               </button>
                               <button
                                 onClick=${() => sendAction("passSelf")}
                                 className="rounded-lg border border-amber-500/50 py-2.5 text-sm font-bold text-amber-300 transition hover:bg-amber-500/10"
                               >
-                                停牌
+                                ${t("actionPass")}
                               </button>
                             </div>
                           `
@@ -441,17 +545,17 @@ function App() {
                       ${isMine && isMyPendingFlipThree && !game.winner
                         ? html`
                             <div className="mt-4 space-y-2 rounded-lg border border-cyan-500/30 bg-cyan-500/10 p-3">
-                              <p className="text-[10px] font-bold uppercase text-cyan-300">指定玩家連翻三張：</p>
+                              <p className="text-[10px] font-bold uppercase text-cyan-300">${t("selectFlipThreeTarget")}</p>
                               <div className="flex flex-wrap gap-2">
                                 ${game.players
-                                  .filter((t) => !t.busted && !t.passed)
-                                  .map((t) => html`
+                                  .filter((target) => !target.busted && !target.passed)
+                                  .map((target) => html`
                                     <button
-                                      key=${t.id}
-                                      onClick=${() => sendAction("selectFlipThreeTarget", { targetPlayerId: t.id })}
+                                      key=${target.id}
+                                      onClick=${() => sendAction("selectFlipThreeTarget", { targetPlayerId: target.id })}
                                       className="rounded bg-cyan-500/20 px-2 py-1 text-xs font-semibold text-cyan-200 transition hover:bg-cyan-500/40"
                                     >
-                                      ${t.name}
+                                      ${target.name}
                                     </button>
                                   `)}
                               </div>
@@ -462,17 +566,17 @@ function App() {
                       ${isMine && isMyPendingFreeze && !game.winner
                         ? html`
                             <div className="mt-4 space-y-2 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3">
-                              <p className="text-[10px] font-bold uppercase text-rose-300">指定玩家凍結：</p>
+                              <p className="text-[10px] font-bold uppercase text-rose-300">${t("selectFreezeTarget")}</p>
                               <div className="flex flex-wrap gap-2">
                                 ${game.players
-                                  .filter((t) => !t.busted && !t.passed)
-                                  .map((t) => html`
+                                  .filter((target) => !target.busted && !target.passed)
+                                  .map((target) => html`
                                     <button
-                                      key=${t.id}
-                                      onClick=${() => sendAction("resolveFreezeTarget", { targetPlayerId: t.id })}
+                                      key=${target.id}
+                                      onClick=${() => sendAction("resolveFreezeTarget", { targetPlayerId: target.id })}
                                       className="rounded bg-rose-500/20 px-2 py-1 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/40"
                                     >
-                                      ${t.name}
+                                      ${target.name}
                                     </button>
                                   `)}
                               </div>
@@ -487,9 +591,9 @@ function App() {
 
         <aside className="space-y-6">
           <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
-            <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">排行榜</h2>
+            <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">${t("leaderboardTitle")}</h2>
             ${leaderboard.length === 0
-              ? html`<p className="text-sm text-slate-500">目前沒有可顯示的分數。</p>`
+              ? html`<p className="text-sm text-slate-500">${t("noScore")}</p>`
               : html`
                   <ol className="space-y-2">
                     ${leaderboard.map((player, index) => {
@@ -510,12 +614,12 @@ function App() {
                           <div className="flex min-w-0 items-center gap-2">
                             <span className="font-mono text-xs text-slate-400">#${index + 1}</span>
                             <span className="truncate text-sm font-semibold text-slate-100">${player.name}</span>
-                            ${isMe ? html`<span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">你</span>` : null}
-                            ${isWinner ? html`<span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">WIN</span>` : null}
+                            ${isMe ? html`<span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">${t("meTag")}</span>` : null}
+                            ${isWinner ? html`<span className="rounded bg-cyan-500/20 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">${t("winnerTag")}</span>` : null}
                           </div>
                           <div className="text-right">
                             <p className="font-mono text-sm font-bold text-slate-100">${player.totalScore}</p>
-                            <p className="text-[10px] text-slate-500">本局 ${player.roundScore}</p>
+                            <p className="text-[10px] text-slate-500">${t("roundScoreInline", { score: player.roundScore })}</p>
                           </div>
                         </li>
                       `;
@@ -525,7 +629,7 @@ function App() {
           </div>
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
-            <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">管理控制台</h2>
+            <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">${t("adminPanelTitle")}</h2>
             ${isAdmin
               ? html`
                   <div className="space-y-3">
@@ -533,67 +637,70 @@ function App() {
                       onClick=${() => sendAction("startGame")}
                       className="w-full rounded-xl bg-cyan-500 py-3 font-bold text-slate-950 shadow-lg shadow-cyan-500/20 transition hover:bg-cyan-400 disabled:opacity-50"
                     >
-                      ${game && game.gameStarted ? "重新開始遊戲" : "開始新局"}
+                      ${game && game.gameStarted ? t("restartGame") : t("startNewGame")}
                     </button>
                     <button
                       onClick=${() => sendAction("startNewRound")}
                       disabled=${!game || !game.gameStarted || !!game.winner || !!pendingFlipThree || !!pendingFreeze}
                       className="w-full rounded-xl bg-emerald-500 py-3 font-bold text-slate-950 shadow-lg shadow-emerald-500/20 transition hover:bg-emerald-400 disabled:opacity-50"
                     >
-                      手動開始新回合
+                      ${t("manualStartRound")}
                     </button>
                     <button
                       onClick=${() => sendAction("resetGame")}
                       className="w-full rounded-xl border border-slate-700 py-3 font-bold text-slate-400 transition hover:border-rose-500/50 hover:text-rose-400"
                     >
-                      重置房間
+                      ${t("resetRoom")}
                     </button>
                   </div>
                 `
               : html`
                   <div className="rounded-lg border border-slate-800 bg-slate-950 p-3 text-center">
-                    <p className="text-sm text-slate-500">只有房主可以控制遊戲流程</p>
+                    <p className="text-sm text-slate-500">${t("adminOnlyTip")}</p>
                   </div>
                 `}
           </div>
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
-            <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">統計數據</h2>
+            <h2 className="mb-4 text-lg font-semibold border-b border-slate-800 pb-2">${t("statsTitle")}</h2>
             <div className="space-y-4 text-sm">
               <div className="flex justify-between">
-                <span className="text-slate-400">剩餘牌數</span>
+                <span className="text-slate-400">${t("remainingDeck")}</span>
                 <span className="font-mono font-bold text-slate-100">${game ? game.deckCount : "-"}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-slate-400">第二次機會次數</span>
+                <span className="text-slate-400">${t("secondChanceCount")}</span>
                 <span className="font-mono font-bold text-emerald-400">${secondChanceStats.appearedCount}</span>
               </div>
               <div>
-                <span className="text-xs text-slate-500">擋下的數字：</span>
+                <span className="text-xs text-slate-500">${t("blockedNumbers")}</span>
                 <div className="mt-1 flex flex-wrap gap-1">
                   ${secondChanceStats.blockedNumbers.length === 0
-                    ? html`<span className="text-[10px] text-slate-600 italic">無</span>`
+                    ? html`<span className="text-[10px] text-slate-600 italic">${t("none")}</span>`
                     : secondChanceStats.blockedNumbers.map((n, i) => html`<span key=${i} className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px]">${n}</span>`)}
                 </div>
               </div>
               <div className="rounded-lg bg-slate-950 p-3">
-                <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">最近動態</p>
+                <p className="mb-2 text-[10px] font-bold uppercase tracking-wider text-slate-500">${t("recentActivity")}</p>
                 <div className="max-h-32 space-y-1 overflow-y-auto pr-1 text-[11px] text-slate-400">
                   ${secondChanceStats.discardPile.length === 0
-                    ? html`<p className="italic text-slate-600">尚無紀錄</p>`
-                    : secondChanceStats.discardPile.slice().reverse().map((log, i) => html`<p key=${i} className="border-l border-slate-800 pl-2 py-0.5">${log}</p>`)}
+                    ? html`<p className="italic text-slate-600">${t("noRecords")}</p>`
+                    : secondChanceStats.discardPile
+                        .slice()
+                        .reverse()
+                        .map((log, i) => html`<p key=${i} className="border-l border-slate-800 pl-2 py-0.5">${log}</p>`)}
                 </div>
               </div>
             </div>
           </div>
 
           <div className="rounded-2xl border border-slate-800 bg-slate-900/50 p-5">
-            <h2 className="mb-4 text-lg font-semibold text-amber-500 border-b border-slate-800 pb-2">遊戲規則說明 (v3.1)</h2>
+            <h2 className="mb-4 text-lg font-semibold text-amber-500 border-b border-slate-800 pb-2">${t("rulesTitle")}</h2>
             <div className="space-y-3 text-[11px] leading-relaxed text-slate-400">
-              <p><b className="text-slate-200">牌組分佈：</b>數字牌 (0-12) 採階梯式分佈，數字 1 有 1 張，數字 12 有 12 張（0 也是 1 張）。共 79 張數字牌。</p>
-              <p><b className="text-slate-200">特殊牌：</b>凍結 (3)、翻三張 (3)、第二次機會 (3) 各 3 張。加分牌 (+2~+10) 與兩倍牌 (x2) 共 6 張。全組 94 張。</p>
-              <p><b className="text-slate-200">回合時限：</b>每回合 30 秒，逾時將自動停牌。指定目標效果則有 15 秒時限。</p>
-              <p><b className="text-slate-200">獲勝條件：</b>首位總分達到 200 分的玩家獲勝。若該回合多人達標且平手，將進入延長賽直到分出勝負。</p>
+              <p><b className="text-slate-200">${t("ruleDeckDistTitle")}</b>${t("ruleDeckDistBody")}</p>
+              <p><b className="text-slate-200">${t("ruleSpecialTitle")}</b>${t("ruleSpecialBody")}</p>
+              <p><b className="text-slate-200">${t("ruleTimeoutTitle")}</b>${t("ruleTimeoutBody")}</p>
+              <p><b className="text-slate-200">${t("ruleWinTitle")}</b>${t("ruleWinBody")}</p>
             </div>
           </div>
         </aside>
@@ -615,14 +722,16 @@ function App() {
           <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-950/80 p-4 backdrop-blur-sm">
             <div className="w-full max-w-md animate-bounce-short rounded-3xl border border-cyan-500/30 bg-slate-900 p-8 text-center shadow-[0_0_50px_rgba(34,211,238,0.2)]">
               <div className="mb-4 inline-flex h-20 w-20 items-center justify-center rounded-full bg-cyan-500/10 text-4xl">🏆</div>
-              <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-cyan-400">恭喜獲勝</h2>
+              <h2 className="text-sm font-bold uppercase tracking-[0.2em] text-cyan-400">${t("winnerCongrats")}</h2>
               <h3 className="mt-2 text-3xl font-black text-slate-100">${game.winner.name}</h3>
-              <p className="mt-4 text-slate-400">總得分：<span className="text-2xl font-bold text-slate-100">${game.winner.totalScore}</span></p>
-              ${isAdmin ? html`
-                <button onClick=${() => sendAction("startGame")} className="mt-8 w-full rounded-xl bg-cyan-500 py-4 font-black text-slate-950 transition hover:bg-cyan-400">
-                  開啟新局
-                </button>
-              ` : null}
+              <p className="mt-4 text-slate-400">${t("winnerTotalScore")}：<span className="text-2xl font-bold text-slate-100">${game.winner.totalScore}</span></p>
+              ${isAdmin
+                ? html`
+                    <button onClick=${() => sendAction("startGame")} className="mt-8 w-full rounded-xl bg-cyan-500 py-4 font-black text-slate-950 transition hover:bg-cyan-400">
+                      ${t("openNewGame")}
+                    </button>
+                  `
+                : null}
             </div>
           </div>
         `

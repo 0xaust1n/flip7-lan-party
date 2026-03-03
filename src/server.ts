@@ -8,6 +8,7 @@ import {
   createInitialState,
   toPublicState,
   handleTurnTimeout,
+  resolveGameLocale,
   type ActionClientData,
   type ClientAction,
   type InternalGameState
@@ -35,6 +36,16 @@ const MIME_TYPES: Record<string, string> = {
 };
 
 const store = new GameStore();
+
+function wsErrorMessage(localeInput: string | null | undefined, key: "badMessage" | "badJson"): string {
+  const locale = resolveGameLocale(localeInput);
+  if (locale === "en") {
+    if (key === "badMessage") return "Invalid message format.";
+    return "Invalid JSON format.";
+  }
+  if (key === "badMessage") return "訊息格式錯誤。";
+  return "JSON 格式錯誤。";
+}
 
 export function applyAction(state: InternalGameState, action: ClientAction, wsData: WSData): void {
   applyGameAction(state, action, {
@@ -193,12 +204,22 @@ function startServer() {
             try {
               const parsed = JSON.parse(String(message)) as ClientAction;
               if (!parsed || parsed.type !== "action") {
-                ws.send(JSON.stringify({ type: "error", message: "訊息格式錯誤。" }));
+                ws.send(
+                  JSON.stringify({
+                    type: "error",
+                    message: wsErrorMessage(ws.data.locale, "badMessage")
+                  })
+                );
                 return;
               }
               void handleAction(ws, parsed);
             } catch {
-              ws.send(JSON.stringify({ type: "error", message: "JSON 格式錯誤。" }));
+              ws.send(
+                JSON.stringify({
+                  type: "error",
+                  message: wsErrorMessage(ws.data.locale, "badJson")
+                })
+              );
             }
           },
           close(ws) {
@@ -212,11 +233,13 @@ function startServer() {
           if (url.pathname === "/ws") {
             const room = (url.searchParams.get("room") || DEFAULT_ROOM).trim() || DEFAULT_ROOM;
             const userId = sanitizeUserId(url.searchParams.get("userId"));
+            const locale = resolveGameLocale(url.searchParams.get("lang"));
             const ok = serverInstance.upgrade(req, {
               data: {
                 room,
                 clientId: userId,
-                claimedPlayerId: null
+                claimedPlayerId: null,
+                locale
               }
             });
             if (ok) return;

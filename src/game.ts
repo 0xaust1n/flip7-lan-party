@@ -3,6 +3,7 @@ import {
   PublicGameState,
   ClientAction,
   ApplyActionContext,
+  GameLocale,
   PlayerState,
   PendingQueuedAction,
   Card,
@@ -18,6 +19,227 @@ const MAX_PLAYERS = 6;
 const WINNING_SCORE = 200;
 const FREEZE_TARGET_TIMEOUT_MS = 15000;
 export const TURN_TIMEOUT_MS = 30000;
+
+const INTERNAL_CARD_LABELS = {
+  freeze: "凍結",
+  flipThree: "翻三張",
+  secondChance: "第二次機會"
+} as const;
+
+type TextValue = string | ((params: Record<string, string | number>) => string);
+type TextTable = Record<string, TextValue>;
+
+const TEXT: Record<GameLocale, TextTable> = {
+  "zh-Hant": {
+    welcome: "歡迎來到 Flip 7，請先加入玩家並由房主開始新局。",
+    playerFallback: "玩家",
+    activeWord: "active",
+    actionFreeze: "凍結",
+    actionFlipThree: "翻三張",
+    actionSecondChance: "第二次機會",
+    actionCardDropped: ({ action, activeWord }) =>
+      `已棄置動作牌：${action}（玩家已非 ${activeWord}）。`,
+    secondChanceAppearedLog: ({ player }) => `${player} 抽到第二次機會`,
+    secondChanceBlockedLog: ({ player, value }) => `${player} 第二次機會擋下 ${value}`,
+    secondChanceGained: ({ player }) => `${player} 獲得「第二次機會」。`,
+    secondChanceDuplicateDiscardLog: ({ player }) => `${player} 重複第二次機會無法轉交，棄牌`,
+    secondChanceDuplicateDiscard: ({ player, activeWord }) =>
+      `${player} 抽到「第二次機會」，但沒有可轉交的 ${activeWord} 玩家，故棄牌。`,
+    secondChanceTransferredLog: ({ player, target }) => `${player} 的重複第二次機會轉交給 ${target}`,
+    secondChanceTransferred: ({ player, target }) => `${player} 抽到重複「第二次機會」，轉交給 ${target}。`,
+    noPendingFreeze: "目前沒有待指定的凍結效果。",
+    freezeNoValidTarget: ({ chooser }) => `${chooser} 的凍結沒有有效目標，效果略過。`,
+    freezeFallback: ({ chooser, target }) =>
+      `${chooser} 的凍結目標失效，改為凍結 ${target}。${target} 本輪已 bank 並退出。`,
+    freezeResolved: ({ chooser, target }) => `${chooser} 凍結了 ${target}。${target} 本輪已 bank 並退出。`,
+    noCardToDraw: ({ player }) => `${player} 沒有可抽的牌。`,
+    drewDuplicateBlocked: ({ player, value }) => `${player} 抽到重複數字 ${value}，但使用了「第二次機會」。`,
+    drewDuplicateBusted: ({ player, value }) => `${player} 又抽到 ${value}，爆牌！`,
+    drewNumberFlip7: ({ player, value }) => `${player} 抽到數字 ${value}，達成 Flip 7！本回合立即結束。`,
+    drewNumber: ({ player, value }) => `${player} 抽到數字 ${value}。`,
+    drewModifier: ({ player, card }) => `${player} 抽到修正牌 ${card}。`,
+    drewFreezeNeedTarget: ({ player }) => `${player} 抽到「凍結」，請指定要凍結的玩家。`,
+    drewFlipThreeNeedTarget: ({ player }) => `${player} 抽到「翻三張」，請指定一位玩家連翻三張。`,
+    flipDuplicateBlocked: ({ player, value }) => `${player} 翻到重複數字 ${value}，使用了「第二次機會」。`,
+    flipDuplicateBusted: ({ player, value }) => `${player} 翻到重複數字 ${value}，爆牌。`,
+    flipHitFlip7: ({ player }) => `${player} 在翻三張過程達成 Flip 7！`,
+    flipNumber: ({ player, value }) => `${player} 翻到數字 ${value}。`,
+    flipModifier: ({ player, card }) => `${player} 翻到修正牌 ${card}。`,
+    flipSetAside: ({ player, action }) => `${player} 翻到「${action}」，先 set aside。`,
+    roundWinner: ({ player, score, round }) => `${player} 以 ${score} 分贏得第 ${round} 回合。`,
+    roundTie: ({ round, score }) => `第 ${round} 回合平手，分數為 ${score}。`,
+    roundAllBusted: ({ round }) => `第 ${round} 回合結束：全員爆牌。`,
+    gameChampion: ({ player, score }) => `${player} 以 ${score} 分獲勝！`,
+    overtime: ({ leaders, score }) => ` 目前 ${leaders} 同為 ${score} 分，進入延長賽。`,
+    roundStartedWithFirst: ({ round, player }) => ` 已開始第 ${round} 回合，${player} 先手。`,
+    roundStarted: ({ round }) => ` 已開始第 ${round} 回合。`,
+    timeoutAutoPass: ({ player }) => `${player} 操作逾時，已自動停牌。`,
+    timeoutFreezeAutoResolveSuffix: "（凍結指定逾時自動處理）",
+    winnerAlreadyExists: ({ player }) => `${player} 已經獲勝，請由房主開啟新局。`,
+    playerNameEmpty: "玩家名稱不可為空。",
+    maxPlayers: ({ max }) => `最多只能 ${max} 位玩家。`,
+    gameInProgressJoinLater: "遊戲進行中，請下一局再加入玩家。",
+    onePlayerPerUser: "同一個使用者只能新增一位玩家。",
+    joinedAsAdmin: ({ player }) => `${player} 加入了遊戲，並成為房主。`,
+    joinedAndBound: ({ player }) => `${player} 加入了遊戲，並已自動綁定此裝置。`,
+    renameBadRequest: "改名請求格式錯誤。",
+    renameOnlyOwned: "你只能修改自己綁定的玩家名稱。",
+    playerNotFound: "找不到玩家。",
+    playerRenamed: ({ player }) => `玩家名稱已改為 ${player}。`,
+    addPlayerFirst: "請先新增你的玩家。",
+    onlyAdminStartGame: "只有房主可以開始新局。",
+    joinPlayersFirst: "請先加入玩家。",
+    newGameStartedWithFirst: ({ player }) => `新局開始，第 1 回合由 ${player} 先手。`,
+    newGameStarted: "新局開始，第 1 回合。",
+    gameNotStartedOpenGame: "遊戲尚未開始，請由房主先開啟新局。",
+    specifyFreezeTargetFirst: "請先指定「凍結」的目標玩家。",
+    specifyFlipThreeTargetFirst: "請先指定「翻三張」的目標玩家。",
+    notYourTurn: "現在不是你的回合。",
+    cannotDealNow: "目前無法抽牌。",
+    onlyFreezeOwnerCanChoose: "只有凍結牌持有者可以指定目標。",
+    completeFreezeFirst: "請先完成凍結目標指定。",
+    noPendingFlipThree: "目前沒有待指定的翻三張效果。",
+    onlyFlipThreeOwnerCanChoose: "只有抽到「翻三張」的玩家可以指定目標。",
+    notYourTurnForFlipThree: "現在不是你處理翻三張的時機。",
+    flipThreeTargetBadFormat: "翻三張目標格式錯誤。",
+    targetPlayerNotFound: "找不到指定的目標玩家。",
+    targetNotPlayable: "該玩家目前不可被指定（爆牌或已停牌）。",
+    flipThreeAssignedPrefix: ({ source, target, details }) => `${source} 指定 ${target} 連翻三張。${details}`,
+    askFreezeChooser: ({ player }) => `請 ${player} 指定凍結目標。`,
+    askFlipChooser: ({ player }) => `請 ${player} 指定翻三張目標。`,
+    cannotPassNow: "目前無法停牌。",
+    passedThisRound: ({ player }) => `${player} 停牌，本回合將被跳過。`,
+    onlyAdminStartRound: "只有房主可以開始新回合。",
+    gameNotStartedYet: "遊戲尚未開始，請先開啟新局。",
+    completeFlipThreeFirst: "請先完成翻三張指定目標。",
+    onlyAdminReset: "只有房主可以重置遊戲。",
+    roomReset: "房間已重置為全新牌局。",
+    unknownAction: "未知操作。"
+  },
+  en: {
+    welcome: "Welcome to Flip 7. Add players first, then let the host start a new game.",
+    playerFallback: "Player",
+    activeWord: "active",
+    actionFreeze: "Freeze",
+    actionFlipThree: "Flip Three",
+    actionSecondChance: "Second Chance",
+    actionCardDropped: ({ action, activeWord }) =>
+      `Action card discarded: ${action} (owner is no longer ${activeWord}).`,
+    secondChanceAppearedLog: ({ player }) => `${player} drew Second Chance`,
+    secondChanceBlockedLog: ({ player, value }) => `${player} blocked ${value} with Second Chance`,
+    secondChanceGained: ({ player }) => `${player} gained "Second Chance".`,
+    secondChanceDuplicateDiscardLog: ({ player }) => `${player} drew duplicate Second Chance, cannot transfer, discarded`,
+    secondChanceDuplicateDiscard: ({ player, activeWord }) =>
+      `${player} drew "Second Chance", but there is no ${activeWord} player to transfer to, so it was discarded.`,
+    secondChanceTransferredLog: ({ player, target }) => `${player}'s duplicate Second Chance was transferred to ${target}`,
+    secondChanceTransferred: ({ player, target }) => `${player} drew duplicate "Second Chance" and transferred it to ${target}.`,
+    noPendingFreeze: "There is no pending Freeze effect to resolve.",
+    freezeNoValidTarget: ({ chooser }) => `${chooser}'s Freeze had no valid target and was skipped.`,
+    freezeFallback: ({ chooser, target }) =>
+      `${chooser}'s Freeze target became invalid, so ${target} was frozen instead. ${target} has banked and exited this round.`,
+    freezeResolved: ({ chooser, target }) =>
+      `${chooser} froze ${target}. ${target} has banked and exited this round.`,
+    noCardToDraw: ({ player }) => `${player} has no card to draw.`,
+    drewDuplicateBlocked: ({ player, value }) =>
+      `${player} drew duplicate number ${value}, but used "Second Chance".`,
+    drewDuplicateBusted: ({ player, value }) => `${player} drew ${value} again and busted!`,
+    drewNumberFlip7: ({ player, value }) =>
+      `${player} drew number ${value} and hit Flip 7! The round ends immediately.`,
+    drewNumber: ({ player, value }) => `${player} drew number ${value}.`,
+    drewModifier: ({ player, card }) => `${player} drew modifier card ${card}.`,
+    drewFreezeNeedTarget: ({ player }) => `${player} drew "Freeze". Choose a player to freeze.`,
+    drewFlipThreeNeedTarget: ({ player }) => `${player} drew "Flip Three". Choose a player to flip three cards.`,
+    flipDuplicateBlocked: ({ player, value }) =>
+      `${player} flipped duplicate number ${value} and used "Second Chance".`,
+    flipDuplicateBusted: ({ player, value }) => `${player} flipped duplicate number ${value} and busted.`,
+    flipHitFlip7: ({ player }) => `${player} hit Flip 7 during Flip Three!`,
+    flipNumber: ({ player, value }) => `${player} flipped number ${value}.`,
+    flipModifier: ({ player, card }) => `${player} flipped modifier card ${card}.`,
+    flipSetAside: ({ player, action }) => `${player} flipped "${action}" and set it aside first.`,
+    roundWinner: ({ player, score, round }) => `${player} won round ${round} with ${score} points.`,
+    roundTie: ({ round, score }) => `Round ${round} is tied at ${score} points.`,
+    roundAllBusted: ({ round }) => `Round ${round} ended: everyone busted.`,
+    gameChampion: ({ player, score }) => `${player} wins with ${score} points!`,
+    overtime: ({ leaders, score }) => ` ${leaders} are tied at ${score}, entering overtime.`,
+    roundStartedWithFirst: ({ round, player }) => ` Round ${round} started. ${player} goes first.`,
+    roundStarted: ({ round }) => ` Round ${round} started.`,
+    timeoutAutoPass: ({ player }) => `${player} timed out and was auto-passed.`,
+    timeoutFreezeAutoResolveSuffix: "(Freeze target timed out and was auto-resolved)",
+    winnerAlreadyExists: ({ player }) => `${player} has already won. Ask the host to start a new game.`,
+    playerNameEmpty: "Player name cannot be empty.",
+    maxPlayers: ({ max }) => `At most ${max} players are allowed.`,
+    gameInProgressJoinLater: "Game is in progress. Join in the next game.",
+    onePlayerPerUser: "Each user can only add one player.",
+    joinedAsAdmin: ({ player }) => `${player} joined and became the host.`,
+    joinedAndBound: ({ player }) => `${player} joined and was auto-bound to this device.`,
+    renameBadRequest: "Invalid rename request format.",
+    renameOnlyOwned: "You can only rename the player bound to you.",
+    playerNotFound: "Player not found.",
+    playerRenamed: ({ player }) => `Player name changed to ${player}.`,
+    addPlayerFirst: "Please add your player first.",
+    onlyAdminStartGame: "Only the host can start a new game.",
+    joinPlayersFirst: "Please add players first.",
+    newGameStartedWithFirst: ({ player }) => `New game started. Round 1 begins with ${player}.`,
+    newGameStarted: "New game started. Round 1 begins.",
+    gameNotStartedOpenGame: "Game has not started. Ask the host to start a new game first.",
+    specifyFreezeTargetFirst: 'Please choose a target for "Freeze" first.',
+    specifyFlipThreeTargetFirst: 'Please choose a target for "Flip Three" first.',
+    notYourTurn: "It is not your turn.",
+    cannotDealNow: "Cannot draw a card right now.",
+    onlyFreezeOwnerCanChoose: 'Only the player who drew "Freeze" can choose the target.',
+    completeFreezeFirst: "Please complete Freeze target selection first.",
+    noPendingFlipThree: "There is no pending Flip Three effect to resolve.",
+    onlyFlipThreeOwnerCanChoose: 'Only the player who drew "Flip Three" can choose the target.',
+    notYourTurnForFlipThree: "It is not your timing to resolve Flip Three.",
+    flipThreeTargetBadFormat: "Invalid Flip Three target format.",
+    targetPlayerNotFound: "Target player not found.",
+    targetNotPlayable: "That player cannot be targeted right now (busted or passed).",
+    flipThreeAssignedPrefix: ({ source, target, details }) => `${source} assigned Flip Three to ${target}. ${details}`,
+    askFreezeChooser: ({ player }) => `Ask ${player} to choose a Freeze target.`,
+    askFlipChooser: ({ player }) => `Ask ${player} to choose a Flip Three target.`,
+    cannotPassNow: "Cannot pass right now.",
+    passedThisRound: ({ player }) => `${player} passed and will be skipped this round.`,
+    onlyAdminStartRound: "Only the host can start a new round.",
+    gameNotStartedYet: "Game has not started. Start a new game first.",
+    completeFlipThreeFirst: "Please complete Flip Three target selection first.",
+    onlyAdminReset: "Only the host can reset the game.",
+    roomReset: "Room has been reset to a fresh game.",
+    unknownAction: "Unknown action."
+  }
+};
+
+export function resolveGameLocale(input: string | null | undefined): GameLocale {
+  return String(input || "").toLowerCase().startsWith("en") ? "en" : "zh-Hant";
+}
+
+function getLocale(state: InternalGameState): GameLocale {
+  return resolveGameLocale(state.locale);
+}
+
+function t(state: InternalGameState, key: string, params: Record<string, string | number> = {}): string {
+  const locale = getLocale(state);
+  const value = TEXT[locale][key] ?? TEXT["zh-Hant"][key] ?? key;
+  if (typeof value === "function") return value(params);
+  return value;
+}
+
+function tByLocale(locale: GameLocale, key: string, params: Record<string, string | number> = {}): string {
+  const value = TEXT[locale][key] ?? TEXT["zh-Hant"][key] ?? key;
+  if (typeof value === "function") return value(params);
+  return value;
+}
+
+function localizedActionName(state: InternalGameState, action: PendingQueuedAction["action"]): string {
+  return action === "freeze" ? t(state, "actionFreeze") : t(state, "actionFlipThree");
+}
+
+function displayCardLabel(state: InternalGameState, card: Card): string {
+  if (card.kind === "number") return String(card.value);
+  if (card.kind === "modifier") return card.modifier === "x2" ? "x2" : `+${card.value}`;
+  if (card.action === "freeze") return t(state, "actionFreeze");
+  if (card.action === "flip_three") return t(state, "actionFlipThree");
+  return t(state, "actionSecondChance");
+}
 
 function createPlayer(name: string): PlayerState {
   return {
@@ -39,6 +261,7 @@ function createPlayer(name: string): PlayerState {
 export function createInitialState(room: string): InternalGameState {
   return {
     room,
+    locale: "zh-Hant",
     round: 0,
     gameStarted: false,
     adminPlayerId: null,
@@ -55,7 +278,7 @@ export function createInitialState(room: string): InternalGameState {
       blockedNumbers: [],
       discardPile: []
     },
-    message: "歡迎來到 Flip 7，請先加入玩家並由房主開始新局。",
+    message: tByLocale("zh-Hant", "welcome"),
     winner: null,
     updatedAt: Date.now()
   };
@@ -153,7 +376,12 @@ function promoteNextPendingAction(state: InternalGameState): string[] {
     const next = state.pendingActionQueue.shift()!;
     const chooser = getPlayerById(state, next.chooserPlayerId);
     if (!chooser || !isPlayable(chooser)) {
-      droppedMessages.push(`已棄置動作牌：${next.action === "freeze" ? "凍結" : "翻三張"}（玩家已非 active）。`);
+      droppedMessages.push(
+        t(state, "actionCardDropped", {
+          action: localizedActionName(state, next.action),
+          activeWord: t(state, "activeWord")
+        })
+      );
       continue;
     }
 
@@ -189,7 +417,7 @@ function appendSecondChanceDiscardEntry(state: InternalGameState, entry: string)
 
 function markSecondChanceAppeared(state: InternalGameState, playerName: string): void {
   state.secondChanceStats.appearedCount += 1;
-  appendSecondChanceDiscardEntry(state, `${playerName} 抽到第二次機會`);
+  appendSecondChanceDiscardEntry(state, t(state, "secondChanceAppearedLog", { player: playerName }));
 }
 
 function markSecondChanceBlockedNumber(state: InternalGameState, playerName: string, value: number): void {
@@ -197,7 +425,10 @@ function markSecondChanceBlockedNumber(state: InternalGameState, playerName: str
   if (state.secondChanceStats.blockedNumbers.length > 80) {
     state.secondChanceStats.blockedNumbers.splice(0, state.secondChanceStats.blockedNumbers.length - 80);
   }
-  appendSecondChanceDiscardEntry(state, `${playerName} 第二次機會擋下 ${value}`);
+  appendSecondChanceDiscardEntry(
+    state,
+    t(state, "secondChanceBlockedLog", { player: playerName, value })
+  );
 }
 
 function pickFreezeFallbackTarget(state: InternalGameState, chooserPlayerId: string): PlayerState | null {
@@ -232,25 +463,34 @@ function handleSecondChanceDraw(state: InternalGameState, player: PlayerState): 
 
   if (!player.secondChance) {
     player.secondChance = true;
-    player.cards.push("第二次機會");
-    return `${player.name} 獲得「第二次機會」。`;
+    player.cards.push(INTERNAL_CARD_LABELS.secondChance);
+    return t(state, "secondChanceGained", { player: player.name });
   }
 
   const transferTarget = pickSecondChanceTransferTarget(state, player.id);
   if (!transferTarget) {
-    appendSecondChanceDiscardEntry(state, `${player.name} 重複第二次機會無法轉交，棄牌`);
-    return `${player.name} 抽到「第二次機會」，但沒有可轉交的 active 玩家，故棄牌。`;
+    appendSecondChanceDiscardEntry(
+      state,
+      t(state, "secondChanceDuplicateDiscardLog", { player: player.name })
+    );
+    return t(state, "secondChanceDuplicateDiscard", {
+      player: player.name,
+      activeWord: t(state, "activeWord")
+    });
   }
 
   transferTarget.secondChance = true;
-  transferTarget.cards.push("第二次機會");
-  appendSecondChanceDiscardEntry(state, `${player.name} 的重複第二次機會轉交給 ${transferTarget.name}`);
-  return `${player.name} 抽到重複「第二次機會」，轉交給 ${transferTarget.name}。`;
+  transferTarget.cards.push(INTERNAL_CARD_LABELS.secondChance);
+  appendSecondChanceDiscardEntry(
+    state,
+    t(state, "secondChanceTransferredLog", { player: player.name, target: transferTarget.name })
+  );
+  return t(state, "secondChanceTransferred", { player: player.name, target: transferTarget.name });
 }
 
 function resolvePendingFreezeEffect(state: InternalGameState, requestedTargetId: string | null): string {
   const pending = state.pendingFreeze;
-  if (!pending) return "目前沒有待指定的凍結效果。";
+  if (!pending) return t(state, "noPendingFreeze");
 
   const chooser = getPlayerById(state, pending.chooserPlayerId);
   let target = requestedTargetId ? getPlayerById(state, requestedTargetId) : null;
@@ -262,14 +502,22 @@ function resolvePendingFreezeEffect(state: InternalGameState, requestedTargetId:
 
   let message = "";
   if (!target) {
-    message = `${chooser?.name || "玩家"} 的凍結沒有有效目標，效果略過。`;
+    message = t(state, "freezeNoValidTarget", {
+      chooser: chooser?.name || t(state, "playerFallback")
+    });
   } else {
     target.passed = true;
     target.passBonus = 0;
     recalculateRoundScore(target);
     message = usedFallback
-      ? `${chooser?.name || "玩家"} 的凍結目標失效，改為凍結 ${target.name}。${target.name} 本輪已 bank 並退出。`
-      : `${chooser?.name || "玩家"} 凍結了 ${target.name}。${target.name} 本輪已 bank 並退出。`;
+      ? t(state, "freezeFallback", {
+          chooser: chooser?.name || t(state, "playerFallback"),
+          target: target.name
+        })
+      : t(state, "freezeResolved", {
+          chooser: chooser?.name || t(state, "playerFallback"),
+          target: target.name
+        });
   }
 
   state.pendingFreeze = null;
@@ -323,9 +571,9 @@ function drawFromDeck(state: InternalGameState): Card | null {
 function cardLabel(card: Card): string {
   if (card.kind === "number") return String(card.value);
   if (card.kind === "modifier") return card.modifier === "x2" ? "x2" : `+${card.value}`;
-  if (card.action === "freeze") return "凍結";
-  if (card.action === "flip_three") return "翻三張";
-  return "第二次機會";
+  if (card.action === "freeze") return INTERNAL_CARD_LABELS.freeze;
+  if (card.action === "flip_three") return INTERNAL_CARD_LABELS.flipThree;
+  return INTERNAL_CARD_LABELS.secondChance;
 }
 
 function removeOneCardLabel(player: PlayerState, label: string): void {
@@ -349,18 +597,18 @@ type FlipThreeResolveResult = {
 
 function applyNormalCardToPlayer(state: InternalGameState, player: PlayerState, card: Card | null): CardApplyResult {
   if (!card) {
-    return { message: `${player.name} 沒有可抽的牌。`, endedByFlip7: false };
+    return { message: t(state, "noCardToDraw", { player: player.name }), endedByFlip7: false };
   }
 
   if (card.kind === "number") {
     if (player.numberCards.includes(card.value)) {
       if (player.secondChance) {
         player.secondChance = false;
-        removeOneCardLabel(player, "第二次機會");
+        removeOneCardLabel(player, INTERNAL_CARD_LABELS.secondChance);
         markSecondChanceBlockedNumber(state, player.name, card.value);
         recalculateRoundScore(player);
         return {
-          message: `${player.name} 抽到重複數字 ${card.value}，但使用了「第二次機會」。`,
+          message: t(state, "drewDuplicateBlocked", { player: player.name, value: card.value }),
           endedByFlip7: false
         };
       }
@@ -368,16 +616,16 @@ function applyNormalCardToPlayer(state: InternalGameState, player: PlayerState, 
       player.busted = true;
       player.roundScore = 0;
       player.passBonus = 0;
-      return { message: `${player.name} 又抽到 ${card.value}，爆牌！`, endedByFlip7: false };
+      return { message: t(state, "drewDuplicateBusted", { player: player.name, value: card.value }), endedByFlip7: false };
     }
 
     player.numberCards.push(card.value);
     player.cards.push(cardLabel(card));
     recalculateRoundScore(player);
     if (hasFlip7(player)) {
-      return { message: `${player.name} 抽到數字 ${card.value}，達成 Flip 7！本回合立即結束。`, endedByFlip7: true };
+      return { message: t(state, "drewNumberFlip7", { player: player.name, value: card.value }), endedByFlip7: true };
     }
-    return { message: `${player.name} 抽到數字 ${card.value}。`, endedByFlip7: false };
+    return { message: t(state, "drewNumber", { player: player.name, value: card.value }), endedByFlip7: false };
   }
 
   if (card.kind === "modifier") {
@@ -388,7 +636,10 @@ function applyNormalCardToPlayer(state: InternalGameState, player: PlayerState, 
     }
     player.cards.push(cardLabel(card));
     recalculateRoundScore(player);
-    return { message: `${player.name} 抽到修正牌 ${cardLabel(card)}。`, endedByFlip7: false };
+    return {
+      message: t(state, "drewModifier", { player: player.name, card: displayCardLabel(state, card) }),
+      endedByFlip7: false
+    };
   }
 
   if (card.action === "second_chance") {
@@ -397,18 +648,18 @@ function applyNormalCardToPlayer(state: InternalGameState, player: PlayerState, 
   }
 
   if (card.action === "freeze") {
-    player.cards.push("凍結");
+    player.cards.push(INTERNAL_CARD_LABELS.freeze);
     state.pendingFreeze = {
       chooserPlayerId: player.id,
       resumeFromPlayerId: player.id,
       expiresAt: Date.now() + FREEZE_TARGET_TIMEOUT_MS
     };
-    return { message: `${player.name} 抽到「凍結」，請指定要凍結的玩家。`, endedByFlip7: false };
+    return { message: t(state, "drewFreezeNeedTarget", { player: player.name }), endedByFlip7: false };
   }
 
-  player.cards.push("翻三張");
+  player.cards.push(INTERNAL_CARD_LABELS.flipThree);
   state.pendingFlipThree = { sourcePlayerId: player.id, resumeFromPlayerId: player.id };
-  return { message: `${player.name} 抽到「翻三張」，請指定一位玩家連翻三張。`, endedByFlip7: false };
+  return { message: t(state, "drewFlipThreeNeedTarget", { player: player.name }), endedByFlip7: false };
 }
 
 function resolveFlipThreeSequence(
@@ -424,7 +675,7 @@ function resolveFlipThreeSequence(
     if (target.busted || target.passed) break;
     const card = drawFromDeck(state);
     if (!card) {
-      messages.push(`${target.name} 沒有可抽的牌。`);
+      messages.push(t(state, "noCardToDraw", { player: target.name }));
       break;
     }
 
@@ -432,17 +683,17 @@ function resolveFlipThreeSequence(
       if (target.numberCards.includes(card.value)) {
         if (target.secondChance) {
           target.secondChance = false;
-          removeOneCardLabel(target, "第二次機會");
+          removeOneCardLabel(target, INTERNAL_CARD_LABELS.secondChance);
           markSecondChanceBlockedNumber(state, target.name, card.value);
           recalculateRoundScore(target);
-          messages.push(`${target.name} 翻到重複數字 ${card.value}，使用了「第二次機會」。`);
+          messages.push(t(state, "flipDuplicateBlocked", { player: target.name, value: card.value }));
           continue;
         }
         target.cards.push(cardLabel(card));
         target.busted = true;
         target.roundScore = 0;
         target.passBonus = 0;
-        messages.push(`${target.name} 翻到重複數字 ${card.value}，爆牌。`);
+        messages.push(t(state, "flipDuplicateBusted", { player: target.name, value: card.value }));
         break;
       }
 
@@ -451,10 +702,10 @@ function resolveFlipThreeSequence(
       recalculateRoundScore(target);
       if (hasFlip7(target)) {
         endedByFlip7 = true;
-        messages.push(`${target.name} 在翻三張過程達成 Flip 7！`);
+        messages.push(t(state, "flipHitFlip7", { player: target.name }));
         break;
       }
-      messages.push(`${target.name} 翻到數字 ${card.value}。`);
+      messages.push(t(state, "flipNumber", { player: target.name, value: card.value }));
       continue;
     }
 
@@ -466,7 +717,7 @@ function resolveFlipThreeSequence(
       }
       target.cards.push(cardLabel(card));
       recalculateRoundScore(target);
-      messages.push(`${target.name} 翻到修正牌 ${cardLabel(card)}。`);
+      messages.push(t(state, "flipModifier", { player: target.name, card: displayCardLabel(state, card) }));
       continue;
     }
 
@@ -480,9 +731,7 @@ function resolveFlipThreeSequence(
       chooserPlayerId: target.id,
       resumeFromPlayerId
     });
-    messages.push(
-      `${target.name} 翻到「${card.action === "freeze" ? "凍結" : "翻三張"}」，先 set aside。`
-    );
+    messages.push(t(state, "flipSetAside", { player: target.name, action: displayCardLabel(state, card) }));
   }
 
   if (target.busted || endedByFlip7) {
@@ -500,6 +749,7 @@ function resolveFlipThreeSequence(
 export function toPublicState(state: InternalGameState): PublicGameState {
   return {
     room: state.room,
+    locale: getLocale(state),
     round: state.round,
     gameStarted: state.gameStarted,
     adminPlayerId: state.adminPlayerId,
@@ -528,6 +778,7 @@ export function toPublicState(state: InternalGameState): PublicGameState {
 
 export function normalizeLoadedState(state: InternalGameState, room: string): InternalGameState {
   state.room = room;
+  state.locale = resolveGameLocale(state.locale);
   if (!Array.isArray(state.players)) state.players = [];
   if (!Array.isArray(state.turnOrder)) state.turnOrder = [];
   if (typeof state.gameStarted !== "boolean") state.gameStarted = false;
@@ -535,7 +786,7 @@ export function normalizeLoadedState(state: InternalGameState, room: string): In
     state.round = state.gameStarted ? 1 : 0;
   }
   if (typeof state.message !== "string") {
-    state.message = "歡迎來到 Flip 7，請先加入玩家並由房主開始新局。";
+    state.message = t(state, "welcome");
   }
   if (!Array.isArray(state.deck)) {
     state.deck = createDeck();
@@ -637,10 +888,10 @@ function resolveRoundAndMaybeStartNext(state: InternalGameState, reasonPrefix = 
     const winners = nonBusted.filter((p) => p.roundScore === topRoundScore);
     roundSummary =
       winners.length === 1
-        ? `${winners[0].name} 以 ${topRoundScore} 分贏得第 ${state.round} 回合。`
-        : `第 ${state.round} 回合平手，分數為 ${topRoundScore}。`;
+        ? t(state, "roundWinner", { player: winners[0].name, score: topRoundScore, round: state.round })
+        : t(state, "roundTie", { round: state.round, score: topRoundScore });
   } else {
-    roundSummary = `第 ${state.round} 回合結束：全員爆牌。`;
+    roundSummary = t(state, "roundAllBusted", { round: state.round });
   }
 
   state.players.forEach((p) => {
@@ -657,12 +908,15 @@ function resolveRoundAndMaybeStartNext(state: InternalGameState, reasonPrefix = 
     state.currentTurnPlayerId = null;
     state.turnStartedAt = null;
     clearPendingActionState(state);
-    return `${reasonPrefix}${roundSummary} ${champion.name} 以 ${champion.totalScore} 分獲勝！`.trim();
+    return `${reasonPrefix}${roundSummary} ${t(state, "gameChampion", {
+      player: champion.name,
+      score: champion.totalScore
+    })}`.trim();
   }
 
   const overtimeText =
     topTotal >= WINNING_SCORE && leaders.length > 1
-      ? ` 目前 ${leaders.map((p) => p.name).join(" / ")} 同為 ${topTotal} 分，進入延長賽。`
+      ? t(state, "overtime", { leaders: leaders.map((p) => p.name).join(" / "), score: topTotal })
       : "";
 
   state.players.forEach((player) => resetRoundFields(player));
@@ -682,7 +936,9 @@ function resolveRoundAndMaybeStartNext(state: InternalGameState, reasonPrefix = 
     state.turnStartedAt = null;
   }
   const next = getPlayerById(state, state.currentTurnPlayerId);
-  const startText = next ? ` 已開始第 ${state.round} 回合，${next.name} 先手。` : ` 已開始第 ${state.round} 回合。`;
+  const startText = next
+    ? t(state, "roundStartedWithFirst", { round: state.round, player: next.name })
+    : t(state, "roundStarted", { round: state.round });
   return `${reasonPrefix}${roundSummary}${overtimeText}${startText}`.trim();
 }
 
@@ -697,7 +953,7 @@ export function handleTurnTimeout(state: InternalGameState): string | null {
   player.passed = true;
   player.passBonus = 0;
   recalculateRoundScore(player);
-  const message = `${player.name} 操作逾時，已自動停牌。`;
+  const message = t(state, "timeoutAutoPass", { player: player.name });
 
   advanceTurn(state);
 
@@ -708,6 +964,7 @@ export function handleTurnTimeout(state: InternalGameState): string | null {
 }
 
 export function applyAction(state: InternalGameState, action: ClientAction, context: ApplyActionContext): void {
+  state.locale = resolveGameLocale(context.actor.locale || state.locale);
   normalizeTurnOrder(state);
   ensureCurrentTurn(state);
   const playerByClient = context.getRoomPlayerByClient(context.actor.room);
@@ -721,11 +978,11 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
 
   const timeoutMessage = resolveExpiredPendingFreeze(state);
   if (timeoutMessage) {
-    writeMessage(`${timeoutMessage}（凍結指定逾時自動處理）`);
+    writeMessage(`${timeoutMessage}${t(state, "timeoutFreezeAutoResolveSuffix")}`);
   }
 
   if (state.winner && action.action !== "resetGame" && action.action !== "startGame") {
-    writeMessage(`${state.winner.name} 已經獲勝，請由房主開啟新局。`);
+    writeMessage(t(state, "winnerAlreadyExists", { player: state.winner.name }));
     state.updatedAt = Date.now();
     return;
   }
@@ -734,19 +991,19 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
     case "addPlayer": {
       const name = sanitizeName(action.payload?.name);
       if (!name) {
-        writeMessage("玩家名稱不可為空。");
+        writeMessage(t(state, "playerNameEmpty"));
         break;
       }
       if (state.players.length >= MAX_PLAYERS) {
-        writeMessage(`最多只能 ${MAX_PLAYERS} 位玩家。`);
+        writeMessage(t(state, "maxPlayers", { max: MAX_PLAYERS }));
         break;
       }
       if (state.gameStarted) {
-        writeMessage("遊戲進行中，請下一局再加入玩家。");
+        writeMessage(t(state, "gameInProgressJoinLater"));
         break;
       }
       if (playerByClient.has(context.actor.clientId)) {
-        writeMessage("同一個使用者只能新增一位玩家。");
+        writeMessage(t(state, "onePlayerPerUser"));
         break;
       }
       const player = createPlayer(name);
@@ -759,9 +1016,9 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
       context.actor.claimedPlayerId = player.id;
       ensureCurrentTurn(state);
       if (state.adminPlayerId === player.id) {
-        writeMessage(`${name} 加入了遊戲，並成為房主。`);
+        writeMessage(t(state, "joinedAsAdmin", { player: name }));
       } else {
-        writeMessage(`${name} 加入了遊戲，並已自動綁定此裝置。`);
+        writeMessage(t(state, "joinedAndBound", { player: name }));
       }
       break;
     }
@@ -770,35 +1027,35 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
       const name = sanitizeName(action.payload?.name);
       const playerId = action.payload?.playerId;
       if (!name || typeof playerId !== "string") {
-        writeMessage("改名請求格式錯誤。");
+        writeMessage(t(state, "renameBadRequest"));
         break;
       }
       const ownedPlayerId = playerByClient.get(context.actor.clientId) || null;
       if (ownedPlayerId !== playerId) {
-        writeMessage("你只能修改自己綁定的玩家名稱。");
+        writeMessage(t(state, "renameOnlyOwned"));
         break;
       }
       const player = getPlayerById(state, playerId);
       if (!player) {
-        writeMessage("找不到玩家。");
+        writeMessage(t(state, "playerNotFound"));
         break;
       }
       player.name = name;
-      writeMessage(`玩家名稱已改為 ${name}。`);
+      writeMessage(t(state, "playerRenamed", { player: name }));
       break;
     }
 
     case "startGame": {
       if (!requesterPlayerId) {
-        writeMessage("請先新增你的玩家。");
+        writeMessage(t(state, "addPlayerFirst"));
         break;
       }
       if (!isRequesterAdmin) {
-        writeMessage("只有房主可以開始新局。");
+        writeMessage(t(state, "onlyAdminStartGame"));
         break;
       }
       if (state.players.length === 0) {
-        writeMessage("請先加入玩家。");
+        writeMessage(t(state, "joinPlayersFirst"));
         break;
       }
 
@@ -827,36 +1084,40 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
         state.turnStartedAt = null;
       }
       const first = getPlayerById(state, state.currentTurnPlayerId);
-      writeMessage(first ? `新局開始，第 1 回合由 ${first.name} 先手。` : "新局開始，第 1 回合。");
+      writeMessage(
+        first
+          ? t(state, "newGameStartedWithFirst", { player: first.name })
+          : t(state, "newGameStarted")
+      );
       break;
     }
 
     case "dealSelf": {
       if (!state.gameStarted) {
-        writeMessage("遊戲尚未開始，請由房主先開啟新局。");
+        writeMessage(t(state, "gameNotStartedOpenGame"));
         break;
       }
       if (state.pendingFreeze) {
-        writeMessage("請先指定「凍結」的目標玩家。");
+        writeMessage(t(state, "specifyFreezeTargetFirst"));
         break;
       }
       if (state.pendingFlipThree) {
-        writeMessage("請先指定「翻三張」的目標玩家。");
+        writeMessage(t(state, "specifyFlipThreeTargetFirst"));
         break;
       }
       const claimedId = playerByClient.get(context.actor.clientId) || null;
       if (!claimedId) {
-        writeMessage("請先新增你的玩家。");
+        writeMessage(t(state, "addPlayerFirst"));
         break;
       }
       if (state.currentTurnPlayerId !== claimedId) {
-        writeMessage("現在不是你的回合。");
+        writeMessage(t(state, "notYourTurn"));
         break;
       }
 
       const player = getPlayerById(state, claimedId);
       if (!player || !isPlayable(player)) {
-        writeMessage("目前無法抽牌。");
+        writeMessage(t(state, "cannotDealNow"));
         break;
       }
       const card = drawFromDeck(state);
@@ -875,17 +1136,17 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
 
     case "resolveFreezeTarget": {
       if (!state.gameStarted) {
-        writeMessage("遊戲尚未開始，請由房主先開啟新局。");
+        writeMessage(t(state, "gameNotStartedOpenGame"));
         break;
       }
       const pending = state.pendingFreeze;
       if (!pending) {
-        writeMessage("目前沒有待指定的凍結效果。");
+        writeMessage(t(state, "noPendingFreeze"));
         break;
       }
       const claimedId = playerByClient.get(context.actor.clientId) || null;
       if (!claimedId || claimedId !== pending.chooserPlayerId) {
-        writeMessage("只有凍結牌持有者可以指定目標。");
+        writeMessage(t(state, "onlyFreezeOwnerCanChoose"));
         break;
       }
 
@@ -900,44 +1161,45 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
 
     case "selectFlipThreeTarget": {
       if (!state.gameStarted) {
-        writeMessage("遊戲尚未開始，請由房主先開啟新局。");
+        writeMessage(t(state, "gameNotStartedOpenGame"));
         break;
       }
       if (state.pendingFreeze) {
-        writeMessage("請先完成凍結目標指定。");
+        writeMessage(t(state, "completeFreezeFirst"));
         break;
       }
       const pending = state.pendingFlipThree;
       if (!pending) {
-        writeMessage("目前沒有待指定的翻三張效果。");
+        writeMessage(t(state, "noPendingFlipThree"));
         break;
       }
       const claimedId = playerByClient.get(context.actor.clientId) || null;
       if (!claimedId || claimedId !== pending.sourcePlayerId) {
-        writeMessage("只有抽到「翻三張」的玩家可以指定目標。");
+        writeMessage(t(state, "onlyFlipThreeOwnerCanChoose"));
         break;
       }
       if (state.currentTurnPlayerId !== claimedId) {
-        writeMessage("現在不是你處理翻三張的時機。");
+        writeMessage(t(state, "notYourTurnForFlipThree"));
         break;
       }
 
       const targetPlayerId = action.payload?.targetPlayerId;
       if (typeof targetPlayerId !== "string") {
-        writeMessage("翻三張目標格式錯誤。");
+        writeMessage(t(state, "flipThreeTargetBadFormat"));
         break;
       }
       const target = getPlayerById(state, targetPlayerId);
       if (!target) {
-        writeMessage("找不到指定的目標玩家。");
+        writeMessage(t(state, "targetPlayerNotFound"));
         break;
       }
       if (!isPlayable(target)) {
-        writeMessage("該玩家目前不可被指定（爆牌或已停牌）。");
+        writeMessage(t(state, "targetNotPlayable"));
         break;
       }
 
       const source = getPlayerById(state, pending.sourcePlayerId);
+      const sourceName = source ? source.name : t(state, "playerFallback");
       const forced = resolveFlipThreeSequence(state, target, pending.resumeFromPlayerId);
       state.pendingFlipThree = null;
 
@@ -952,7 +1214,11 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
         writeMessage(
           resolveRoundAndMaybeStartNext(
             state,
-            `${source ? source.name : "玩家"} 指定 ${target.name} 連翻三張。${forced.messages.join(" ")} `
+            `${t(state, "flipThreeAssignedPrefix", {
+              source: sourceName,
+              target: target.name,
+              details: forced.messages.join(" ")
+            })} `
           )
         );
         break;
@@ -962,20 +1228,26 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
       const pendingFreezeAfter = state.pendingFreeze as InternalGameState["pendingFreeze"];
       if (pendingFreezeAfter) {
         const freezeChooser = getPlayerById(state, pendingFreezeAfter.chooserPlayerId);
+        const extra = freezeChooser ? t(state, "askFreezeChooser", { player: freezeChooser.name }) : "";
         writeMessage(
-          `${source ? source.name : "玩家"} 指定 ${target.name} 連翻三張。${forced.messages.join(" ")} ${
-            freezeChooser ? `請 ${freezeChooser.name} 指定凍結目標。` : ""
-          } ${dropped.join(" ")}`.trim()
+          `${t(state, "flipThreeAssignedPrefix", {
+            source: sourceName,
+            target: target.name,
+            details: forced.messages.join(" ")
+          })} ${extra} ${dropped.join(" ")}`.trim()
         );
         break;
       }
       const pendingFlipThreeAfter = state.pendingFlipThree as InternalGameState["pendingFlipThree"];
       if (pendingFlipThreeAfter) {
         const flipChooser = getPlayerById(state, pendingFlipThreeAfter.sourcePlayerId);
+        const extra = flipChooser ? t(state, "askFlipChooser", { player: flipChooser.name }) : "";
         writeMessage(
-          `${source ? source.name : "玩家"} 指定 ${target.name} 連翻三張。${forced.messages.join(" ")} ${
-            flipChooser ? `請 ${flipChooser.name} 指定翻三張目標。` : ""
-          } ${dropped.join(" ")}`.trim()
+          `${t(state, "flipThreeAssignedPrefix", {
+            source: sourceName,
+            target: target.name,
+            details: forced.messages.join(" ")
+          })} ${extra} ${dropped.join(" ")}`.trim()
         );
         break;
       }
@@ -983,72 +1255,74 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
       state.currentTurnPlayerId = pending.resumeFromPlayerId;
       advanceTurn(state);
       writeMessage(
-        `${source ? source.name : "玩家"} 指定 ${target.name} 連翻三張。${forced.messages.join(" ")} ${dropped.join(
-          " "
-        )}`.trim()
+        `${t(state, "flipThreeAssignedPrefix", {
+          source: sourceName,
+          target: target.name,
+          details: forced.messages.join(" ")
+        })} ${dropped.join(" ")}`.trim()
       );
       break;
     }
 
     case "passSelf": {
       if (!state.gameStarted) {
-        writeMessage("遊戲尚未開始，請由房主先開啟新局。");
+        writeMessage(t(state, "gameNotStartedOpenGame"));
         break;
       }
       if (state.pendingFreeze) {
-        writeMessage("請先指定「凍結」的目標玩家。");
+        writeMessage(t(state, "specifyFreezeTargetFirst"));
         break;
       }
       if (state.pendingFlipThree) {
-        writeMessage("請先指定「翻三張」的目標玩家。");
+        writeMessage(t(state, "specifyFlipThreeTargetFirst"));
         break;
       }
       const claimedId = playerByClient.get(context.actor.clientId) || null;
       if (!claimedId) {
-        writeMessage("請先新增你的玩家。");
+        writeMessage(t(state, "addPlayerFirst"));
         break;
       }
       if (state.currentTurnPlayerId !== claimedId) {
-        writeMessage("現在不是你的回合。");
+        writeMessage(t(state, "notYourTurn"));
         break;
       }
 
       const player = getPlayerById(state, claimedId);
       if (!player || !isPlayable(player)) {
-        writeMessage("目前無法停牌。");
+        writeMessage(t(state, "cannotPassNow"));
         break;
       }
       player.passed = true;
       player.passBonus = 0;
       recalculateRoundScore(player);
-      writeMessage(`${player.name} 停牌，本回合將被跳過。`);
+      writeMessage(t(state, "passedThisRound", { player: player.name }));
       advanceTurn(state);
       break;
     }
 
     case "startNewRound": {
       if (!requesterPlayerId) {
-        writeMessage("請先新增你的玩家。");
+        writeMessage(t(state, "addPlayerFirst"));
         break;
       }
       if (!isRequesterAdmin) {
-        writeMessage("只有房主可以開始新回合。");
+        writeMessage(t(state, "onlyAdminStartRound"));
         break;
       }
       if (!state.gameStarted) {
-        writeMessage("遊戲尚未開始，請先開啟新局。");
+        writeMessage(t(state, "gameNotStartedYet"));
         break;
       }
       if (state.pendingFreeze) {
-        writeMessage("請先完成凍結目標指定。");
+        writeMessage(t(state, "completeFreezeFirst"));
         break;
       }
       if (state.pendingFlipThree) {
-        writeMessage("請先完成翻三張指定目標。");
+        writeMessage(t(state, "completeFlipThreeFirst"));
         break;
       }
       if (state.players.length === 0) {
-        writeMessage("請先加入玩家。");
+        writeMessage(t(state, "joinPlayersFirst"));
         break;
       }
       writeMessage(resolveRoundAndMaybeStartNext(state));
@@ -1057,11 +1331,11 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
 
     case "resetGame": {
       if (!requesterPlayerId) {
-        writeMessage("請先新增你的玩家。");
+        writeMessage(t(state, "addPlayerFirst"));
         break;
       }
       if (!isRequesterAdmin) {
-        writeMessage("只有房主可以重置遊戲。");
+        writeMessage(t(state, "onlyAdminReset"));
         break;
       }
       state.round = 0;
@@ -1080,12 +1354,12 @@ export function applyAction(state: InternalGameState, action: ClientAction, cont
         discardPile: []
       };
       context.clearRoomPlayerOwnership(context.actor.room);
-      writeMessage("房間已重置為全新牌局。");
+      writeMessage(t(state, "roomReset"));
       break;
     }
 
     default:
-      writeMessage("未知操作。");
+      writeMessage(t(state, "unknownAction"));
       break;
   }
 

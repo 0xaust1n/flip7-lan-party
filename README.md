@@ -7,7 +7,7 @@ A multiplayer Flip 7-inspired game server built with Bun + WebSocket. Refactored
 - **Ruleset 3.1 Alignment**: Strictly follows the official 94-card deck distribution (0-12 ladder, 3x Actions, 6x Modifiers).
 - **Real-time 30s Turn Timer**: Automated background timer processing ensures the game never stalls.
 - **Dynamic UI/UX**: React-based frontend with smooth CSS animations, toast notifications, and a real-time shrinking timer bar.
-- **Robust Persistence**: Powered by `ioredis` for reliable state storage with an automatic in-memory fallback.
+- **Robust Persistence**: Powered by `ioredis` with Redis-only state storage.
 - **Modular Architecture**: Clean separation of types, deck logic, game state transitions, and server-side coordination.
 
 ## Tech Stack
@@ -49,7 +49,7 @@ A multiplayer Flip 7-inspired game server built with Bun + WebSocket. Refactored
 ## Environment Variables
 
 - `PORT` (optional): Server port, defaults to `3000` (auto-increments if port is busy).
-- `REDIS_URL` (optional): Connection string for Redis persistence. If not provided, the server defaults to in-memory mode.
+- `REDIS_URL` (optional): Connection string for Redis persistence. Defaults to `redis://127.0.0.1:6379`.
 
 ## Project Structure
 
@@ -57,7 +57,7 @@ A multiplayer Flip 7-inspired game server built with Bun + WebSocket. Refactored
 - `src/game.ts` - Core game engine and state transition logic.
 - `src/types.ts` - Centralized TypeScript interfaces and action types.
 - `src/deck.ts` - Official 94-card deck generation and shuffle logic.
-- `src/store.ts` - Multi-layered state storage (Redis + Memory).
+- `src/store.ts` - Redis-only state storage.
 - `src/rooms.ts` - Room-based mutual exclusion locking and client management.
 - `tests/server.test.ts` - Comprehensive ruleset validation suite.
 - `src/client/app.js` - Frontend source (React + htm).

@@ -2,6 +2,7 @@ export type NumberCard = { kind: "number"; value: number };
 export type ActionCard = { kind: "action"; action: "freeze" | "flip_three" | "second_chance" };
 export type ModifierCard = { kind: "modifier"; modifier: "plus" | "x2"; value?: number };
 export type Card = NumberCard | ActionCard | ModifierCard;
+export type GameLocale = "zh-Hant" | "en";
 
 export type PendingFreezeState = {
   chooserPlayerId: string;
@@ -44,6 +45,7 @@ export type WinnerState = {
 
 export type InternalGameState = {
   room: string;
+  locale: GameLocale;
   round: number;
   gameStarted: boolean;
   adminPlayerId: string | null;
@@ -66,6 +68,7 @@ export type InternalGameState = {
 
 export type PublicGameState = {
   room: string;
+  locale: GameLocale;
   round: number;
   gameStarted: boolean;
   adminPlayerId: string | null;
@@ -99,6 +102,7 @@ export type ActionClientData = {
   room: string;
   clientId: string;
   claimedPlayerId: string | null;
+  locale?: GameLocale;
 };
 
 export type ApplyActionContext = {

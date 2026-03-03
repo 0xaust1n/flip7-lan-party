@@ -8,7 +8,7 @@
     "dev": "bun run build:client && bun --env-file=.env --hot src/server.ts",
     "start": "bun run build:client && bun --env-file=.env src/server.ts",
     "build:client": "bun run build:client:js && bun run build:client:css",
-    "build:client:js": "bun build ./src/client/app.js --outfile ./public/app.js --target browser --format esm --minify",
+    "build:client:js": "NODE_ENV=production bun build ./src/client/app.js --outfile ./public/app.js --target browser --format esm --minify",
     "build:client:css": "tailwindcss -i ./src/client/styles.css -o ./public/styles.css --minify",
     "test": "bun test",
     "typecheck": "tsc --noEmit"
